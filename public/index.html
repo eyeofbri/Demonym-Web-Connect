@@ -144,10 +144,6 @@
 				opacity: 0.8;
 				font-size: 0.86rem;
 			}
-			.ready-state {
-				margin-top: 12px;
-				opacity: 0.75;
-			}
 			#signal-toss {
 				min-height: 24px;
 				margin: 16px 0 6px;
@@ -287,11 +283,6 @@
 				margin-top: 8px;
 				opacity: 0.72;
 				font-size: 0.82rem;
-			}
-			#ready {
-				width: 100%;
-				margin-bottom: 12px;
-				font-weight: bold;
 			}
 			#moves {
 				display: grid;
@@ -473,40 +464,38 @@
 				<div class="creatures">
 					<div id="player-1" class="creature">
 						<strong>PLAYER 1</strong>
-						<div id="name-1" class="creature-name">Husk Demonym</div>
-						<div>Lineage: <span id="lineage-1">Husk</span></div>
-						<div class="source-line">Source: <span id="source-1">WEB TEST</span></div>
+						<div id="name-1" class="creature-name">WAITING</div>
+						<div>Lineage: <span id="lineage-1">—</span></div>
+						<div class="source-line">Source: <span id="source-1">—</span></div>
 						<div class="source-line">Client: <span id="client-1">WAITING</span></div>
-						<div class="stat">HP: <span id="hp-1">100</span>/<span id="max-hp-1">100</span></div>
-						<div class="stat">Energy: <span id="energy-1">7</span>/<span id="max-energy-1">10</span></div>
-						<div class="status-list" id="statuses-1">No statuses</div>
-						<div class="ready-state" id="ready-1">Not ready</div>
+						<div class="stat">HP: <span id="hp-1">—</span>/<span id="max-hp-1">—</span></div>
+						<div class="stat">Energy: <span id="energy-1">—</span>/<span id="max-energy-1">—</span></div>
+						<div class="status-list" id="statuses-1">Waiting for player...</div>
 					</div>
 
 					<div id="player-2" class="creature">
 						<strong>PLAYER 2</strong>
-						<div id="name-2" class="creature-name">Wisp Demonym</div>
-						<div>Lineage: <span id="lineage-2">Wisp</span></div>
-						<div class="source-line">Source: <span id="source-2">WEB TEST</span></div>
+						<div id="name-2" class="creature-name">WAITING</div>
+						<div>Lineage: <span id="lineage-2">—</span></div>
+						<div class="source-line">Source: <span id="source-2">—</span></div>
 						<div class="source-line">Client: <span id="client-2">WAITING</span></div>
-						<div class="stat">HP: <span id="hp-2">100</span>/<span id="max-hp-2">100</span></div>
-						<div class="stat">Energy: <span id="energy-2">7</span>/<span id="max-energy-2">10</span></div>
-						<div class="status-list" id="statuses-2">No statuses</div>
-						<div class="ready-state" id="ready-2">Not ready</div>
+						<div class="stat">HP: <span id="hp-2">—</span>/<span id="max-hp-2">—</span></div>
+						<div class="stat">Energy: <span id="energy-2">—</span>/<span id="max-energy-2">—</span></div>
+						<div class="status-list" id="statuses-2">Waiting for player...</div>
 					</div>
 				</div>
 
 				<div class="lineage-picker">
 					<label for="lineage-select">YOUR LINEAGE</label>
 					<select id="lineage-select" disabled></select>
-					<small>Choose your lineage before pressing READY. The choice locks when you ready up.</small>
+					<small>Web players use the selected lineage when they enter. Device creatures are supplied by their Cardputer payload.</small>
 				</div>
 
 				<details class="payload-lab">
 					<summary>DEVICE PAYLOAD TEST</summary>
 					<p>
 						This developer tool simulates a Cardputer sending its creature to the room. To import a device creature, connect from the lobby
-						as <strong>Cardputer Mock</strong>, complete the handshake, generate or edit a payload, then import it before pressing READY.
+						as <strong>Cardputer Mock</strong>, complete the handshake, generate or edit a payload, then import it to establish that player.
 					</p>
 					<textarea id="payload-json" spellcheck="false" aria-label="Mock Cardputer creature payload"></textarea>
 					<div class="payload-actions">
@@ -534,7 +523,6 @@
 					<div id="rematch-state"></div>
 				</div>
 				<div id="status">Connecting...</div>
-				<button id="ready" disabled>READY</button>
 				<div id="moves"></div>
 
 				<div class="log">
@@ -543,7 +531,7 @@
 				</div>
 
 				<div class="note">
-					v0.3.2.1 connection-stability bridge. Browser and Cardputer payloads now resolve through Battle Rules v19 while the 60-second
+					v0.3.2.2 room/readiness cleanup. Browser and Cardputer payloads now resolve through Battle Rules v19 while the 60-second
 					session-resume loop remains intact.
 				</div>
 			</section>
@@ -555,7 +543,6 @@
 			const createButton = document.querySelector('#create');
 			const joinButton = document.querySelector('#join');
 			const clientModeSelect = document.querySelector('#client-mode');
-			const readyButton = document.querySelector('#ready');
 			const lineageSelect = document.querySelector('#lineage-select');
 			const payloadJson = document.querySelector('#payload-json');
 			const generatePayloadButton = document.querySelector('#generate-payload');
@@ -677,7 +664,7 @@
 
 			function sendClientHello() {
 				if (!connectionProtocol) return;
-				const version = requestedClientType === 'cardputer' ? 'browser-mock-0.3.2.1' : 'web-0.3.2.1';
+				const version = requestedClientType === 'cardputer' ? 'browser-mock-0.3.2.2' : 'web-0.3.2.2';
 				sendMessage({
 					type: 'client-hello',
 					protocol: connectionProtocol.name,
@@ -954,7 +941,6 @@
 				ws.addEventListener('close', (event) => {
 					if (socket !== ws || event.code === 4001) return;
 					handshakeComplete = false;
-					readyButton.disabled = true;
 					if (intentionalClose) {
 						status.textContent = 'Disconnected.';
 						return;
@@ -964,12 +950,25 @@
 
 				ws.addEventListener('error', () => {
 					if (socket !== ws) return;
-					readyButton.disabled = true;
 					status.textContent = sessionToken ? 'Connection error. Reconnect will be attempted.' : 'Connection error.';
 				});
 			}
 
 			function renderCreature(player) {
+				const connected = connectedPlayers.includes(player);
+				if (!connected) {
+					setText(`#name-${player}`, 'WAITING');
+					setText(`#lineage-${player}`, '—');
+					setText(`#source-${player}`, '—');
+					setText(`#client-${player}`, 'WAITING');
+					setText(`#hp-${player}`, '—');
+					setText(`#max-hp-${player}`, '—');
+					setText(`#energy-${player}`, '—');
+					setText(`#max-energy-${player}`, '—');
+					setText(`#statuses-${player}`, 'Waiting for player...');
+					return;
+				}
+
 				const creature = state.players[player - 1];
 				setText(`#name-${player}`, creature.payload.name);
 				setText(`#lineage-${player}`, creature.payload.lineage.charAt(0).toUpperCase() + creature.payload.lineage.slice(1));
@@ -979,13 +978,6 @@
 				setText(`#max-hp-${player}`, creature.maxHp);
 				setText(`#energy-${player}`, creature.energy);
 				setText(`#max-energy-${player}`, creature.maxEnergy);
-				let readyLabel = state.ready[player - 1] ? 'Ready' : 'Not ready';
-				if (state.started && state.winner === null) {
-					readyLabel = state.lockedPlayers?.[player - 1] ? 'Move locked' : 'Choosing move';
-				} else if (state.winner !== null) {
-					readyLabel = state.winner === 0 ? 'Draw' : state.winner === player ? 'Winner' : 'Defeated';
-				}
-				setText(`#ready-${player}`, readyLabel);
 
 				const statuses = creature.statuses ?? [];
 				setText(
@@ -1003,7 +995,8 @@
 
 			function canEditCreature() {
 				if (!playerNumber || !state) return false;
-				return !state.started && !state.ready[playerNumber - 1] && state.winner === null;
+				const myClient = clientInfoForPlayer(playerNumber);
+				return myClient?.clientType === 'cardputer' && !state.started && !state.ready[playerNumber - 1] && state.winner === null;
 			}
 
 			function buildMockDevicePayload() {
@@ -1032,7 +1025,7 @@
 				} else if (current.source === 'cardputer') {
 					payloadStatus.textContent = `Accepted through Cardputer handshake: ${current.creatureId}`;
 				} else {
-					payloadStatus.textContent = 'Cardputer Mock handshake accepted. Generate and import a device payload before READY.';
+					payloadStatus.textContent = 'Cardputer Mock handshake accepted. Generate and import a device payload to establish this player.';
 				}
 			}
 
@@ -1169,7 +1162,6 @@
 				player2Card.classList.toggle('active', state.started && state.roundFirstPlayer === 2 && state.winner === null);
 
 				const bothConnected = connectedPlayers.includes(1) && connectedPlayers.includes(2);
-				const playerReady = state.ready[playerNumber - 1];
 				const myLocked = Boolean(state.lockedPlayers?.[playerNumber - 1]);
 				const opponent = playerNumber === 1 ? 2 : 1;
 				const opponentLocked = Boolean(state.lockedPlayers?.[opponent - 1]);
@@ -1178,7 +1170,6 @@
 					state.started && state.initiativeWinner ? `SIGNAL TOSS: Player ${state.initiativeWinner} gets Round 1 priority.` : '';
 				renderRoundPanel(myLocked, opponentLocked, opponent);
 				renderResultPanel();
-				readyButton.disabled = !bothConnected || playerReady || state.winner !== null || eventPlaybackActive;
 
 				if (eventPlaybackActive && state.started) {
 					status.textContent = `Resolving Round ${activePlaybackRound ?? state.round}... battle controls are locked.`;
@@ -1186,8 +1177,8 @@
 					status.textContent = state.winner === 0 ? 'Draw.' : state.winner === playerNumber ? 'You win.' : `Player ${state.winner} wins.`;
 				} else if (!bothConnected) {
 					status.textContent = 'Waiting for opponent...';
-				} else if (!state.ready[0] || !state.ready[1]) {
-					status.textContent = playerReady ? 'Ready. Waiting for opponent...' : 'Opponent connected. Press READY.';
+				} else if (!state.started) {
+					status.textContent = 'Opponent connected. Waiting for battle setup...';
 				} else if (myLocked) {
 					status.textContent = opponentLocked ? 'Both moves locked. Resolving...' : `Move locked. Waiting for Player ${opponent}.`;
 				} else if (opponentLocked) {
@@ -1238,7 +1229,6 @@
 				const raw = state.players[playerNumber - 1].payload.lineage;
 				sendMessage({ type: 'select-lineage', lineage: raw.charAt(0).toUpperCase() + raw.slice(1) });
 			});
-			readyButton.addEventListener('click', () => sendMessage({ type: 'ready' }));
 			rematchButton.addEventListener('click', () => sendMessage({ type: 'rematch' }));
 			newBattleButton.addEventListener('click', () => {
 				intentionalClose = true;

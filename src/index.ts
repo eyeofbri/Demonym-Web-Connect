@@ -21,7 +21,24 @@ import {
 type PlayerNumber = 1 | 2;
 type Lineage = 'Husk' | 'Mire' | 'Wisp' | 'Fang' | 'Choir' | 'Machine' | 'Cinder' | 'Veil';
 type BattlePhase = 'waiting' | 'selecting' | 'finished';
-type BattleEventType = 'lineage_selected' | 'creature_imported' | 'ready' | 'signal_toss' | 'round_start' | 'action_locked' | 'move_resolved' | 'move_missed' | 'recover' | 'status_applied' | 'heal' | 'battle_end' | 'rematch_requested' | 'rematch_started' | 'disconnect' | 'reconnect' | 'session_expired';
+type BattleEventType =
+	| 'lineage_selected'
+	| 'creature_imported'
+	| 'ready'
+	| 'signal_toss'
+	| 'round_start'
+	| 'action_locked'
+	| 'move_resolved'
+	| 'move_missed'
+	| 'recover'
+	| 'status_applied'
+	| 'heal'
+	| 'battle_end'
+	| 'rematch_requested'
+	| 'rematch_started'
+	| 'disconnect'
+	| 'reconnect'
+	| 'session_expired';
 type ClientType = 'web' | 'cardputer';
 type LockedAction = MoveId | 'guard' | 'recover' | null;
 
@@ -35,7 +52,11 @@ type ClientCapability =
 	| 'session-resume-v1'
 	| 'compact-state-v1';
 
-interface StatusState { id: StatusId; turns: number; stacks?: number; }
+interface StatusState {
+	id: StatusId;
+	turns: number;
+	stacks?: number;
+}
 interface CreatureState {
 	payload: CanonicalCreaturePayloadV2;
 	fighter: V19Fighter;
@@ -78,22 +99,58 @@ interface BattleState {
 	disconnectDeadlines: [number | null, number | null];
 	connectionIds: [string | null, string | null];
 }
-interface ClientInfo { clientType: ClientType; clientVersion: string; capabilities: ClientCapability[]; }
-interface SocketAttachment { player: PlayerNumber; handshakeComplete: boolean; sessionToken: string; resumed: boolean; clientInfo?: ClientInfo; connectionId: string; }
-interface ClientMessage {
-	type?: string; moveId?: string; lineage?: string; creature?: unknown;
-	protocol?: string; protocolVersion?: number; clientType?: string; clientVersion?: string; capabilities?: unknown;
-	round?: number; action?: { kind?: string; slot?: number };
+interface ClientInfo {
+	clientType: ClientType;
+	clientVersion: string;
+	capabilities: ClientCapability[];
 }
-interface LineageDefinition { id: Lineage; name: string; moves: MoveId[]; }
+interface SocketAttachment {
+	player: PlayerNumber;
+	handshakeComplete: boolean;
+	sessionToken: string;
+	resumed: boolean;
+	clientInfo?: ClientInfo;
+	connectionId: string;
+}
+interface ClientMessage {
+	type?: string;
+	moveId?: string;
+	lineage?: string;
+	creature?: unknown;
+	protocol?: string;
+	protocolVersion?: number;
+	clientType?: string;
+	clientVersion?: string;
+	capabilities?: unknown;
+	round?: number;
+	action?: { kind?: string; slot?: number };
+}
+interface LineageDefinition {
+	id: Lineage;
+	name: string;
+	moves: MoveId[];
+}
 
 const MOVE_LIBRARY = MOVE_LIBRARY_V19;
-const LINEAGE_WIRE: Record<Lineage, CanonicalLineage> = { Husk:'husk', Mire:'mire', Wisp:'wisp', Fang:'fang', Choir:'choir', Machine:'machine', Cinder:'cinder', Veil:'veil' };
-const LINEAGE_STARTERS: Record<Lineage, [MoveId,MoveId,MoveId,MoveId]> = {
-	Husk:['husk-knock','husk-tuck','husk-fault','shell-brace'], Mire:['mire-lash','mire-hide','mire-seep','bog-leech'],
-	Wisp:['wisp-jab','wisp-ward','wisp-ghost-cut','phase-feint'], Fang:['fang-snap','fang-crouch','fang-bait','pursuit-bite'],
-	Choir:['choir-tone','choir-veil','choir-discord','chorus-echo'], Machine:['machine-servo','machine-guard','machine-override','panel-shift'],
-	Cinder:['cinder-jab','cinder-screen','cinder-flash','ember-spire'], Veil:['veil-cut','veil-ward','veil-misdirect','veil-snare'],
+const LINEAGE_WIRE: Record<Lineage, CanonicalLineage> = {
+	Husk: 'husk',
+	Mire: 'mire',
+	Wisp: 'wisp',
+	Fang: 'fang',
+	Choir: 'choir',
+	Machine: 'machine',
+	Cinder: 'cinder',
+	Veil: 'veil',
+};
+const LINEAGE_STARTERS: Record<Lineage, [MoveId, MoveId, MoveId, MoveId]> = {
+	Husk: ['husk-knock', 'husk-tuck', 'husk-fault', 'shell-brace'],
+	Mire: ['mire-lash', 'mire-hide', 'mire-seep', 'bog-leech'],
+	Wisp: ['wisp-jab', 'wisp-ward', 'wisp-ghost-cut', 'phase-feint'],
+	Fang: ['fang-snap', 'fang-crouch', 'fang-bait', 'pursuit-bite'],
+	Choir: ['choir-tone', 'choir-veil', 'choir-discord', 'chorus-echo'],
+	Machine: ['machine-servo', 'machine-guard', 'machine-override', 'panel-shift'],
+	Cinder: ['cinder-jab', 'cinder-screen', 'cinder-flash', 'ember-spire'],
+	Veil: ['veil-cut', 'veil-ward', 'veil-misdirect', 'veil-snare'],
 };
 const LINEAGE_LIBRARY: Record<Lineage, LineageDefinition> = Object.fromEntries(
 	(Object.keys(LINEAGE_WIRE) as Lineage[]).map((lineage) => [lineage, { id: lineage, name: lineage, moves: LINEAGE_STARTERS[lineage] }]),
@@ -103,35 +160,123 @@ const MAX_LOG_ENTRIES = 24;
 const MAX_BATTLE_EVENTS = 64;
 const RECONNECT_GRACE_MS = 60_000;
 const BATTLE_CONFIG = { recoverEnergy: RECOVER_ENERGY, energyRecoveryPerRound: 0, battleRules: 19 };
-const REQUIRED_CLIENT_CAPABILITIES: ClientCapability[] = ['creature-payload-v2','round-lock-v1','battle-events-v1','recover-action-v1','session-resume-v1'];
+const REQUIRED_CLIENT_CAPABILITIES: ClientCapability[] = [
+	'creature-payload-v2',
+	'round-lock-v1',
+	'battle-events-v1',
+	'recover-action-v1',
+	'session-resume-v1',
+];
 const CONNECTION_PROTOCOL = {
-	name: 'demonym-connect-v1', version: 1, serverVersion: '0.3.2.1', requiredCapabilities: REQUIRED_CLIENT_CAPABILITIES,
-	supportedClientTypes: ['web','cardputer'] as ClientType[], aliases: ['demonym-connect'],
+	name: 'demonym-connect-v1',
+	version: 1,
+	serverVersion: '0.3.2.2',
+	requiredCapabilities: REQUIRED_CLIENT_CAPABILITIES,
+	supportedClientTypes: ['web', 'cardputer'] as ClientType[],
+	aliases: ['demonym-connect'],
 };
 const BATTLE_PROTOCOL = {
-	version: 2, creaturePayloadFormat: 'demonym-battle-creature', creaturePayloadVersion: 2, battleRules: 19,
-	battleEventVersion: 1, externalCreatureImport: true, sessionResume: true, reconnectGraceMs: RECONNECT_GRACE_MS,
+	version: 2,
+	creaturePayloadFormat: 'demonym-battle-creature',
+	creaturePayloadVersion: 2,
+	battleRules: 19,
+	battleEventVersion: 1,
+	externalCreatureImport: true,
+	sessionResume: true,
+	reconnectGraceMs: RECONNECT_GRACE_MS,
 	connectionProtocol: CONNECTION_PROTOCOL,
 };
-function numericSeed(): number { const x=new Uint32Array(1); crypto.getRandomValues(x); return x[0] || 1; }
+function numericSeed(): number {
+	const x = new Uint32Array(1);
+	crypto.getRandomValues(x);
+	return x[0] || 1;
+}
 function createWebTestPayload(player: PlayerNumber, lineage: Lineage): CanonicalCreaturePayloadV2 {
-	const i=(Object.keys(LINEAGE_WIRE) as Lineage[]).indexOf(lineage)+1;
-	return { format:'demonym-battle-creature', version:2, source:'web-test', schemaVersion:1, battleRules:19,
-		creatureId: 0x57000000 + player*0x100 + i, visualSeed: 0x0d3a0000 + player*0x100 + i, publicId: 0x1000 + player*0x10 + i,
-		name:`${lineage} Test`, lineage:LINEAGE_WIRE[lineage], form:'static', level:10, currentHealth:100, currentEnergy:100, injury:0,
-		combat:{attackBonus:0,defenseBonus:0,healthBonus:0,energyBonus:0,pressureResistanceMask:0,pressureWeaknessMask:0,pressureBoostMask:0,installedPrimary:0,installedSecondary:0},
-		moveSlots:[...LINEAGE_STARTERS[lineage]] };
+	const i = (Object.keys(LINEAGE_WIRE) as Lineage[]).indexOf(lineage) + 1;
+	return {
+		format: 'demonym-battle-creature',
+		version: 2,
+		source: 'web-test',
+		schemaVersion: 1,
+		battleRules: 19,
+		creatureId: 0x57000000 + player * 0x100 + i,
+		visualSeed: 0x0d3a0000 + player * 0x100 + i,
+		publicId: 0x1000 + player * 0x10 + i,
+		name: `${lineage} Test`,
+		lineage: LINEAGE_WIRE[lineage],
+		form: 'static',
+		level: 10,
+		currentHealth: 100,
+		currentEnergy: 100,
+		injury: 0,
+		combat: {
+			attackBonus: 0,
+			defenseBonus: 0,
+			healthBonus: 0,
+			energyBonus: 0,
+			pressureResistanceMask: 0,
+			pressureWeaknessMask: 0,
+			pressureBoostMask: 0,
+			installedPrimary: 0,
+			installedSecondary: 0,
+		},
+		moveSlots: [...LINEAGE_STARTERS[lineage]],
+	};
 }
-function syncCreature(c: CreatureState): CreatureState { c.hp=c.fighter.hp; c.energy=c.fighter.energy; c.statuses=statusList(c.fighter); c.lastMoveId=c.fighter.lastMove==='none'?null:c.fighter.lastMove; return c; }
+function syncCreature(c: CreatureState): CreatureState {
+	c.hp = c.fighter.hp;
+	c.energy = c.fighter.energy;
+	c.statuses = statusList(c.fighter);
+	c.lastMoveId = c.fighter.lastMove === 'none' ? null : c.fighter.lastMove;
+	return c;
+}
 function createCreatureFromPayload(payload: CanonicalCreaturePayloadV2): CreatureState {
-	const v=validateCanonicalPayloadV2(payload); if('error' in v) throw new Error(v.error);
-	const normalized=structuredClone(v.payload); return syncCreature({payload:normalized,fighter:fighterFromPayload(normalized),hp:0,energy:0,statuses:[],lastMoveId:null});
+	const v = validateCanonicalPayloadV2(payload);
+	if ('error' in v) throw new Error(v.error);
+	const normalized = structuredClone(v.payload);
+	return syncCreature({ payload: normalized, fighter: fighterFromPayload(normalized), hp: 0, energy: 0, statuses: [], lastMoveId: null });
 }
-function createCreature(player: PlayerNumber, lineage?: Lineage): CreatureState { return createCreatureFromPayload(createWebTestPayload(player,lineage ?? (player===1?'Husk':'Wisp'))); }
-function pickStartingPlayer(): PlayerNumber { const b=new Uint8Array(1);crypto.getRandomValues(b);return b[0]%2===0?1:2; }
-function generateSessionToken(): string { const bytes=new Uint8Array(18);crypto.getRandomValues(bytes);return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join(''); }
-function createInitialState(): BattleState { return {version:14,players:[createCreature(1),createCreature(2)],ready:[false,false],started:false,phase:'waiting',round:0,roundFirstPlayer:null,initiativeWinner:null,canonicalFirstPlayer:null,winner:null,lockedMoves:[null,null],lockedCosts:[null,null],battleRuntime:null,rematch:[false,false],matchNumber:1,log:['Battle room created.'],eventSeq:0,events:[],sessionTokens:[null,null],disconnectDeadlines:[null,null],connectionIds:[null,null]}; }
-function otherPlayer(player: PlayerNumber): PlayerNumber { return player===1?2:1; }
+function createCreature(player: PlayerNumber, lineage?: Lineage): CreatureState {
+	return createCreatureFromPayload(createWebTestPayload(player, lineage ?? (player === 1 ? 'Husk' : 'Wisp')));
+}
+function pickStartingPlayer(): PlayerNumber {
+	const b = new Uint8Array(1);
+	crypto.getRandomValues(b);
+	return b[0] % 2 === 0 ? 1 : 2;
+}
+function generateSessionToken(): string {
+	const bytes = new Uint8Array(18);
+	crypto.getRandomValues(bytes);
+	return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+function createInitialState(): BattleState {
+	return {
+		version: 14,
+		players: [createCreature(1), createCreature(2)],
+		ready: [false, false],
+		started: false,
+		phase: 'waiting',
+		round: 0,
+		roundFirstPlayer: null,
+		initiativeWinner: null,
+		canonicalFirstPlayer: null,
+		winner: null,
+		lockedMoves: [null, null],
+		lockedCosts: [null, null],
+		battleRuntime: null,
+		rematch: [false, false],
+		matchNumber: 1,
+		log: ['Battle room created.'],
+		eventSeq: 0,
+		events: [],
+		sessionTokens: [null, null],
+		disconnectDeadlines: [null, null],
+		connectionIds: [null, null],
+	};
+}
+function otherPlayer(player: PlayerNumber): PlayerNumber {
+	return player === 1 ? 2 : 1;
+}
 
 export class BattleRoom extends DurableObject<Env> {
 	private async getState(): Promise<BattleState> {
@@ -169,9 +314,12 @@ export class BattleRoom extends DurableObject<Env> {
 	}
 
 	private getConnectedClients() {
-		return this.ctx.getWebSockets()
+		return this.ctx
+			.getWebSockets()
 			.map((socket) => socket.deserializeAttachment() as SocketAttachment | null)
-			.filter((attachment): attachment is SocketAttachment => Boolean(attachment?.player && attachment.handshakeComplete && attachment.clientInfo))
+			.filter((attachment): attachment is SocketAttachment =>
+				Boolean(attachment?.player && attachment.handshakeComplete && attachment.clientInfo),
+			)
 			.map((attachment) => ({ player: attachment.player, ...attachment.clientInfo }))
 			.sort((a, b) => a.player - b.player);
 	}
@@ -212,7 +360,15 @@ export class BattleRoom extends DurableObject<Env> {
 	}
 
 	private stateForPlayer(state: BattleState, player: PlayerNumber) {
-		const { lockedMoves, lockedCosts: _lockedCosts, battleRuntime: _battleRuntime, sessionTokens: _sessionTokens, disconnectDeadlines: _disconnectDeadlines, connectionIds: _connectionIds, ...publicState } = state;
+		const {
+			lockedMoves,
+			lockedCosts: _lockedCosts,
+			battleRuntime: _battleRuntime,
+			sessionTokens: _sessionTokens,
+			disconnectDeadlines: _disconnectDeadlines,
+			connectionIds: _connectionIds,
+			...publicState
+		} = state;
 		return {
 			...publicState,
 			players: state.players.map((creature) => ({
@@ -224,7 +380,9 @@ export class BattleRoom extends DurableObject<Env> {
 				statuses: creature.statuses,
 				lastMoveId: creature.lastMoveId,
 				moveCooldowns: creature.fighter.moveCooldowns,
-				effectiveMoveCosts: creature.fighter.equippedMoves.map((move) => move === 'none' ? 0 : effectiveEnergyCost(creature.fighter, move)),
+				effectiveMoveCosts: creature.fighter.equippedMoves.map((move) =>
+					move === 'none' ? 0 : effectiveEnergyCost(creature.fighter, move),
+				),
 			})),
 			lockedPlayers: [lockedMoves[0] !== null, lockedMoves[1] !== null],
 			yourLockedMoveId: lockedMoves[player - 1],
@@ -233,8 +391,7 @@ export class BattleRoom extends DurableObject<Env> {
 
 	private usesCompactState(socket: WebSocket): boolean {
 		const attachment = socket.deserializeAttachment() as SocketAttachment | null;
-		return attachment?.clientInfo?.clientType === 'cardputer' &&
-			attachment.clientInfo.capabilities.includes('compact-state-v1');
+		return attachment?.clientInfo?.clientType === 'cardputer' && attachment.clientInfo.capabilities.includes('compact-state-v1');
 	}
 
 	private sendCompactState(socket: WebSocket, state: BattleState, player: PlayerNumber) {
@@ -347,10 +504,9 @@ export class BattleRoom extends DurableObject<Env> {
 		state.lockedCosts = [null, null];
 		state.rematch = [false, false];
 		state.matchNumber += 1;
-		state.log = [`Match ${state.matchNumber} ready. Choose your lineage and press READY.`];
+		state.log = [`Match ${state.matchNumber} reset. Players will re-enter automatically.`];
 		this.addEvent(state, { type: 'rematch_started', round: 0, message: `Match ${state.matchNumber} ready.` });
 	}
-
 
 	private parseClientHello(data: ClientMessage): { ok: true; info: ClientInfo } | { ok: false; error: string } {
 		if (data.protocol !== CONNECTION_PROTOCOL.name && data.protocol !== 'demonym-connect') {
@@ -435,6 +591,9 @@ export class BattleRoom extends DurableObject<Env> {
 		await this.scheduleReconnectAlarm(state);
 		this.sendState(socket, state, attachment.player, 'welcome');
 		await this.broadcastState(state);
+		if (!attachment.resumed && result.info.clientType === 'web') {
+			await this.establishPlayer(socket, attachment.player);
+		}
 	}
 
 	private async handleRematch(socket: WebSocket, player: PlayerNumber) {
@@ -463,114 +622,255 @@ export class BattleRoom extends DurableObject<Env> {
 		await this.saveAndBroadcast(state);
 	}
 
-	private async handleReady(socket: WebSocket, player: PlayerNumber) {
+	private async establishPlayer(socket: WebSocket, player: PlayerNumber) {
 		const state = await this.getState();
-		if (state.winner !== null) { this.send(socket,{type:'error',message:'This battle is already over.'}); return; }
-		if (state.ready[player-1]) return;
-		state.ready[player-1]=true;
-		this.addLog(state,`Player ${player} is ready.`);
-		this.addEvent(state,{type:'ready',player,message:`Player ${player} is ready.`});
+		if (state.winner !== null || state.ready[player - 1]) return;
+		state.ready[player - 1] = true;
+		this.addLog(state, `Player ${player} established.`);
+		this.addEvent(state, { type: 'ready', player, message: `Player ${player} established.` });
 		if (state.ready[0] && state.ready[1] && this.bothPlayersConnected()) {
-			const startingPlayer=pickStartingPlayer();
-			state.started=true; state.phase='selecting'; state.round=1; state.roundFirstPlayer=startingPlayer; state.initiativeWinner=startingPlayer; state.canonicalFirstPlayer=startingPlayer;
-			state.battleRuntime=createRuntime(numericSeed()); state.lockedMoves=[null,null]; state.lockedCosts=[null,null]; state.rematch=[false,false];
-			this.addLog(state,'Both players ready. Signal Toss...'); this.addLog(state,`Player ${startingPlayer} wins the Signal Toss and is canonical first fighter.`);
-			this.addEvent(state,{type:'signal_toss',player:startingPlayer,message:`Player ${startingPlayer} wins the Signal Toss.`});
-			this.addEvent(state,{type:'round_start',player:startingPlayer,message:`Round 1. Player ${startingPlayer} resolves first.`});
+			const startingPlayer = pickStartingPlayer();
+			state.started = true;
+			state.phase = 'selecting';
+			state.round = 1;
+			state.roundFirstPlayer = startingPlayer;
+			state.initiativeWinner = startingPlayer;
+			state.canonicalFirstPlayer = startingPlayer;
+			state.battleRuntime = createRuntime(numericSeed());
+			state.lockedMoves = [null, null];
+			state.lockedCosts = [null, null];
+			state.rematch = [false, false];
+			this.addLog(state, 'Both players established. Signal Toss...');
+			this.addLog(state, `Player ${startingPlayer} wins the Signal Toss and is canonical first fighter.`);
+			this.addEvent(state, { type: 'signal_toss', player: startingPlayer, message: `Player ${startingPlayer} wins the Signal Toss.` });
+			this.addEvent(state, { type: 'round_start', player: startingPlayer, message: `Round 1. Player ${startingPlayer} resolves first.` });
 		}
 		await this.saveAndBroadcast(state);
 	}
 
 	private async handleLineageSelect(socket: WebSocket, player: PlayerNumber, rawLineage?: string) {
-		const state=await this.getState();
-		if(state.winner!==null){this.send(socket,{type:'error',message:'This battle is already over.'});return;}
-		if(state.started||state.ready[player-1]){this.send(socket,{type:'error',message:'Lineage is locked once you are ready.'});return;}
-		if(!rawLineage||!(rawLineage in LINEAGE_LIBRARY)){this.send(socket,{type:'error',message:'Unknown lineage.'});return;}
-		const lineage=rawLineage as Lineage;
-		if(state.players[player-1].payload.lineage===LINEAGE_WIRE[lineage]&&state.players[player-1].payload.source==='web-test')return;
-		state.players[player-1]=createCreature(player,lineage);
-		this.addLog(state,`Player ${player} selected ${lineage}.`);this.addEvent(state,{type:'lineage_selected',player,message:`Player ${player} selected ${lineage}.`});await this.saveAndBroadcast(state);
+		const state = await this.getState();
+		if (state.winner !== null) {
+			this.send(socket, { type: 'error', message: 'This battle is already over.' });
+			return;
+		}
+		if (state.started || state.ready[player - 1]) {
+			this.send(socket, { type: 'error', message: 'Lineage is locked once you enter the battle.' });
+			return;
+		}
+		if (!rawLineage || !(rawLineage in LINEAGE_LIBRARY)) {
+			this.send(socket, { type: 'error', message: 'Unknown lineage.' });
+			return;
+		}
+		const lineage = rawLineage as Lineage;
+		if (state.players[player - 1].payload.lineage === LINEAGE_WIRE[lineage] && state.players[player - 1].payload.source === 'web-test')
+			return;
+		state.players[player - 1] = createCreature(player, lineage);
+		this.addLog(state, `Player ${player} selected ${lineage}.`);
+		this.addEvent(state, { type: 'lineage_selected', player, message: `Player ${player} selected ${lineage}.` });
+		await this.saveAndBroadcast(state);
 	}
 
 	private async handleCreatureImport(socket: WebSocket, player: PlayerNumber, rawPayload: unknown, autoReady = false) {
-		const attachment=socket.deserializeAttachment() as SocketAttachment|null;
-		if(attachment?.clientInfo?.clientType!=='cardputer'){this.send(socket,{type:'error',message:'Cardputer creature imports require a Cardputer client handshake.'});return;}
-		const state=await this.getState();
-		if(state.winner!==null){this.send(socket,{type:'error',message:'This battle is already over.'});return;}
-		if(state.started||state.ready[player-1]){this.send(socket,{type:'error',message:'Creature payload is locked once you are ready.'});return;}
-		const validation=validateCanonicalPayloadV2(rawPayload);
-		if('error' in validation){this.send(socket,{type:'error',message:`Payload rejected: ${validation.error}`});return;}
-		if(validation.payload.source!=='cardputer'){this.send(socket,{type:'error',message:'External creature imports must use source: "cardputer".'});return;}
-		state.players[player-1]=createCreatureFromPayload(validation.payload);
-		this.addLog(state,`Player ${player} imported ${validation.payload.name} using canonical Battle Rules v19.`);
-		this.addEvent(state,{type:'creature_imported',player,message:`Player ${player} imported canonical creature payload v2.`});
+		const attachment = socket.deserializeAttachment() as SocketAttachment | null;
+		if (attachment?.clientInfo?.clientType !== 'cardputer') {
+			this.send(socket, { type: 'error', message: 'Cardputer creature imports require a Cardputer client handshake.' });
+			return;
+		}
+		const state = await this.getState();
+		if (state.winner !== null) {
+			this.send(socket, { type: 'error', message: 'This battle is already over.' });
+			return;
+		}
+		if (state.started || state.ready[player - 1]) {
+			this.send(socket, { type: 'error', message: 'Creature payload is locked once you enter the battle.' });
+			return;
+		}
+		const validation = validateCanonicalPayloadV2(rawPayload);
+		if ('error' in validation) {
+			this.send(socket, { type: 'error', message: `Payload rejected: ${validation.error}` });
+			return;
+		}
+		if (validation.payload.source !== 'cardputer') {
+			this.send(socket, { type: 'error', message: 'External creature imports must use source: "cardputer".' });
+			return;
+		}
+		state.players[player - 1] = createCreatureFromPayload(validation.payload);
+		this.addLog(state, `Player ${player} imported ${validation.payload.name} using canonical Battle Rules v19.`);
+		this.addEvent(state, { type: 'creature_imported', player, message: `Player ${player} imported canonical creature payload v2.` });
 		await this.saveAndBroadcast(state);
-		if(autoReady) await this.handleReady(socket,player);
+		if (autoReady) await this.establishPlayer(socket, player);
 	}
 
 	private emitChoiceResult(state: BattleState, player: PlayerNumber, choice: LockedAction, report: TurnReport, canonicalFirst: boolean) {
-		const target=otherPlayer(player);
-		const move=canonicalFirst?report.firstMove:report.secondMove;
-		const missed=canonicalFirst?report.firstMissed:report.secondMissed;
-		const damage=canonicalFirst?report.firstDamage:report.secondDamage;
-		const recovered=canonicalFirst?report.firstRecovered:report.secondRecovered;
-		const status=canonicalFirst?report.statusAppliedToSecond:report.statusAppliedToFirst;
-		if(choice==='recover'){this.addLog(state,`Player ${player} used Recover and restored ${recovered} Energy.`);this.addEvent(state,{type:'recover',player,targetPlayer:player,amount:recovered,message:`Player ${player} restored ${recovered} Energy.`});return;}
-		if(choice==='guard'){this.addLog(state,`Player ${player} guarded and recovered Energy.`);this.addEvent(state,{type:'move_resolved',player,targetPlayer:player,message:`Player ${player} guarded.`});return;}
-		if(!choice||move==='none')return;
-		const name=MOVE_LIBRARY[move]?.name??move;
-		if(missed){this.addLog(state,`Player ${player} used ${name}, but it missed.`);this.addEvent(state,{type:'move_missed',player,targetPlayer:target,moveId:move,message:`Player ${player} used ${name}, but it missed.`});return;}
-		this.addLog(state,damage>0?`Player ${player} used ${name} for ${damage} damage.`:`Player ${player} used ${name}.`);
-		this.addEvent(state,{type:'move_resolved',player,targetPlayer:target,moveId:move,amount:damage,message:damage>0?`Player ${player} used ${name} for ${damage} damage.`:`Player ${player} used ${name}.`});
-		if(recovered>0)this.addEvent(state,{type:'heal',player,targetPlayer:player,moveId:move,amount:recovered,message:`Player ${player} recovered ${recovered}.`});
-		if(status)this.addEvent(state,{type:'status_applied',player,targetPlayer:target,moveId:move,statusId:status,message:`Player ${target} gained ${status}.`});
+		const target = otherPlayer(player);
+		const move = canonicalFirst ? report.firstMove : report.secondMove;
+		const missed = canonicalFirst ? report.firstMissed : report.secondMissed;
+		const damage = canonicalFirst ? report.firstDamage : report.secondDamage;
+		const recovered = canonicalFirst ? report.firstRecovered : report.secondRecovered;
+		const status = canonicalFirst ? report.statusAppliedToSecond : report.statusAppliedToFirst;
+		if (choice === 'recover') {
+			this.addLog(state, `Player ${player} used Recover and restored ${recovered} Energy.`);
+			this.addEvent(state, {
+				type: 'recover',
+				player,
+				targetPlayer: player,
+				amount: recovered,
+				message: `Player ${player} restored ${recovered} Energy.`,
+			});
+			return;
+		}
+		if (choice === 'guard') {
+			this.addLog(state, `Player ${player} guarded and recovered Energy.`);
+			this.addEvent(state, { type: 'move_resolved', player, targetPlayer: player, message: `Player ${player} guarded.` });
+			return;
+		}
+		if (!choice || move === 'none') return;
+		const name = MOVE_LIBRARY[move]?.name ?? move;
+		if (missed) {
+			this.addLog(state, `Player ${player} used ${name}, but it missed.`);
+			this.addEvent(state, {
+				type: 'move_missed',
+				player,
+				targetPlayer: target,
+				moveId: move,
+				message: `Player ${player} used ${name}, but it missed.`,
+			});
+			return;
+		}
+		this.addLog(state, damage > 0 ? `Player ${player} used ${name} for ${damage} damage.` : `Player ${player} used ${name}.`);
+		this.addEvent(state, {
+			type: 'move_resolved',
+			player,
+			targetPlayer: target,
+			moveId: move,
+			amount: damage,
+			message: damage > 0 ? `Player ${player} used ${name} for ${damage} damage.` : `Player ${player} used ${name}.`,
+		});
+		if (recovered > 0)
+			this.addEvent(state, {
+				type: 'heal',
+				player,
+				targetPlayer: player,
+				moveId: move,
+				amount: recovered,
+				message: `Player ${player} recovered ${recovered}.`,
+			});
+		if (status)
+			this.addEvent(state, {
+				type: 'status_applied',
+				player,
+				targetPlayer: target,
+				moveId: move,
+				statusId: status,
+				message: `Player ${target} gained ${status}.`,
+			});
 	}
 
 	private resolveRound(state: BattleState) {
-		if(!state.lockedMoves[0]||!state.lockedMoves[1]||!state.canonicalFirstPlayer||!state.battleRuntime)return;
-		const canonicalFirst=state.canonicalFirstPlayer, canonicalSecond=otherPlayer(canonicalFirst);
-		const firstCreature=state.players[canonicalFirst-1], secondCreature=state.players[canonicalSecond-1];
-		const toChoice=(creature:CreatureState,locked:LockedAction):BattleChoice=>{
-			if(locked==='recover')return{kind:'recover'}; if(locked==='guard')return{kind:'guard'};
-			const slot=locked?creature.fighter.equippedMoves.indexOf(locked):-1; return{kind:'move',slot:slot>=0?slot:0};
+		if (!state.lockedMoves[0] || !state.lockedMoves[1] || !state.canonicalFirstPlayer || !state.battleRuntime) return;
+		const canonicalFirst = state.canonicalFirstPlayer,
+			canonicalSecond = otherPlayer(canonicalFirst);
+		const firstCreature = state.players[canonicalFirst - 1],
+			secondCreature = state.players[canonicalSecond - 1];
+		const toChoice = (creature: CreatureState, locked: LockedAction): BattleChoice => {
+			if (locked === 'recover') return { kind: 'recover' };
+			if (locked === 'guard') return { kind: 'guard' };
+			const slot = locked ? creature.fighter.equippedMoves.indexOf(locked) : -1;
+			return { kind: 'move', slot: slot >= 0 ? slot : 0 };
 		};
-		const firstLocked=state.lockedMoves[canonicalFirst-1], secondLocked=state.lockedMoves[canonicalSecond-1];
-		const report=resolvePeerTurn(state.battleRuntime,firstCreature.fighter,secondCreature.fighter,toChoice(firstCreature,firstLocked),toChoice(secondCreature,secondLocked));
-		syncCreature(firstCreature);syncCreature(secondCreature);
+		const firstLocked = state.lockedMoves[canonicalFirst - 1],
+			secondLocked = state.lockedMoves[canonicalSecond - 1];
+		const report = resolvePeerTurn(
+			state.battleRuntime,
+			firstCreature.fighter,
+			secondCreature.fighter,
+			toChoice(firstCreature, firstLocked),
+			toChoice(secondCreature, secondLocked),
+		);
+		syncCreature(firstCreature);
+		syncCreature(secondCreature);
 		// Emit playback in the actual v19 initiative order for this turn.
-		const firstActsFirst=(state.battleRuntime.turnCount&1)===1;
-		if(firstActsFirst){this.emitChoiceResult(state,canonicalFirst,firstLocked,report,true);if(report.secondMove!=='none'||secondLocked==='guard'||secondLocked==='recover')this.emitChoiceResult(state,canonicalSecond,secondLocked,report,false);}
-		else{this.emitChoiceResult(state,canonicalSecond,secondLocked,report,false);if(report.firstMove!=='none'||firstLocked==='guard'||firstLocked==='recover')this.emitChoiceResult(state,canonicalFirst,firstLocked,report,true);}
-		if(report.firstStatusDamage>0)this.addLog(state,`Player ${canonicalFirst} took ${report.firstStatusDamage} Burn damage.`);
-		if(report.secondStatusDamage>0)this.addLog(state,`Player ${canonicalSecond} took ${report.secondStatusDamage} Burn damage.`);
-		state.lockedMoves=[null,null];state.lockedCosts=[null,null];
-		if(report.outcome!=='ongoing'){
-			state.phase='finished';
-			if(report.outcome==='first')state.winner=canonicalFirst;else if(report.outcome==='second')state.winner=canonicalSecond;else state.winner=0;
-			const msg=state.winner===0?'Battle ended in a draw.':`Player ${state.winner} wins.`;this.addLog(state,msg);this.addEvent(state,{type:'battle_end',...(state.winner?{player:state.winner}:{ }),message:msg});return;
+		const firstActsFirst = (state.battleRuntime.turnCount & 1) === 1;
+		if (firstActsFirst) {
+			this.emitChoiceResult(state, canonicalFirst, firstLocked, report, true);
+			if (report.secondMove !== 'none' || secondLocked === 'guard' || secondLocked === 'recover')
+				this.emitChoiceResult(state, canonicalSecond, secondLocked, report, false);
+		} else {
+			this.emitChoiceResult(state, canonicalSecond, secondLocked, report, false);
+			if (report.firstMove !== 'none' || firstLocked === 'guard' || firstLocked === 'recover')
+				this.emitChoiceResult(state, canonicalFirst, firstLocked, report, true);
 		}
-		state.round=state.battleRuntime.turnCount+1;
-		state.roundFirstPlayer=(state.round&1)===1?canonicalFirst:canonicalSecond;
-		this.addEvent(state,{type:'round_start',player:state.roundFirstPlayer,message:`Round ${state.round}. Player ${state.roundFirstPlayer} resolves first.`});
+		if (report.firstStatusDamage > 0) this.addLog(state, `Player ${canonicalFirst} took ${report.firstStatusDamage} Burn damage.`);
+		if (report.secondStatusDamage > 0) this.addLog(state, `Player ${canonicalSecond} took ${report.secondStatusDamage} Burn damage.`);
+		state.lockedMoves = [null, null];
+		state.lockedCosts = [null, null];
+		if (report.outcome !== 'ongoing') {
+			state.phase = 'finished';
+			if (report.outcome === 'first') state.winner = canonicalFirst;
+			else if (report.outcome === 'second') state.winner = canonicalSecond;
+			else state.winner = 0;
+			const msg = state.winner === 0 ? 'Battle ended in a draw.' : `Player ${state.winner} wins.`;
+			this.addLog(state, msg);
+			this.addEvent(state, { type: 'battle_end', ...(state.winner ? { player: state.winner } : {}), message: msg });
+			return;
+		}
+		state.round = state.battleRuntime.turnCount + 1;
+		state.roundFirstPlayer = (state.round & 1) === 1 ? canonicalFirst : canonicalSecond;
+		this.addEvent(state, {
+			type: 'round_start',
+			player: state.roundFirstPlayer,
+			message: `Round ${state.round}. Player ${state.roundFirstPlayer} resolves first.`,
+		});
 	}
 
-	private async lockAction(socket: WebSocket, player: PlayerNumber, action: Exclude<LockedAction,null>) {
-		const state=await this.getState();
-		if(!this.bothPlayersConnected()){this.send(socket,{type:'error',message:'Waiting for another player.'});return;}
-		if(state.winner!==null||state.phase==='finished'){this.send(socket,{type:'error',message:'This battle is already over.'});return;}
-		if(!state.started||!state.ready[0]||!state.ready[1]||state.phase!=='selecting'){this.send(socket,{type:'error',message:'Both players must be ready before battling.'});return;}
-		if(state.lockedMoves[player-1]!==null){this.send(socket,{type:'error',message:'Your action is already locked for this round.'});return;}
-		state.lockedMoves[player-1]=action;state.lockedCosts[player-1]=0;this.addLog(state,`Player ${player} locked in an action.`);this.addEvent(state,{type:'action_locked',player,message:`Player ${player} locked in an action.`});
-		if(state.lockedMoves[0]!==null&&state.lockedMoves[1]!==null)this.resolveRound(state);await this.saveAndBroadcast(state);
+	private async lockAction(socket: WebSocket, player: PlayerNumber, action: Exclude<LockedAction, null>) {
+		const state = await this.getState();
+		if (!this.bothPlayersConnected()) {
+			this.send(socket, { type: 'error', message: 'Waiting for another player.' });
+			return;
+		}
+		if (state.winner !== null || state.phase === 'finished') {
+			this.send(socket, { type: 'error', message: 'This battle is already over.' });
+			return;
+		}
+		if (!state.started || !state.ready[0] || !state.ready[1] || state.phase !== 'selecting') {
+			this.send(socket, { type: 'error', message: 'Both players must be established before battling.' });
+			return;
+		}
+		if (state.lockedMoves[player - 1] !== null) {
+			this.send(socket, { type: 'error', message: 'Your action is already locked for this round.' });
+			return;
+		}
+		state.lockedMoves[player - 1] = action;
+		state.lockedCosts[player - 1] = 0;
+		this.addLog(state, `Player ${player} locked in an action.`);
+		this.addEvent(state, { type: 'action_locked', player, message: `Player ${player} locked in an action.` });
+		if (state.lockedMoves[0] !== null && state.lockedMoves[1] !== null) this.resolveRound(state);
+		await this.saveAndBroadcast(state);
 	}
 
 	private async handleMove(socket: WebSocket, player: PlayerNumber, rawMoveId?: string) {
-		const state=await this.getState(); const creature=state.players[player-1];
-		if(!rawMoveId||!(rawMoveId in MOVE_LIBRARY)||rawMoveId==='none'){this.send(socket,{type:'error',message:'Unknown move.'});return;}
-		const moveId=rawMoveId as MoveId;
-		if(!creature.fighter.equippedMoves.includes(moveId)){this.send(socket,{type:'error',message:'That creature does not have this move equipped.'});return;}
-		if(!canUseMove(creature.fighter,moveId)){const cost=effectiveEnergyCost(creature.fighter,moveId);this.send(socket,{type:'error',message:`Move unavailable. ${MOVE_LIBRARY[moveId].name} costs ${cost} Energy or is cooling down.`});return;}
-		await this.lockAction(socket,player,moveId);
+		const state = await this.getState();
+		const creature = state.players[player - 1];
+		if (!rawMoveId || !(rawMoveId in MOVE_LIBRARY) || rawMoveId === 'none') {
+			this.send(socket, { type: 'error', message: 'Unknown move.' });
+			return;
+		}
+		const moveId = rawMoveId as MoveId;
+		if (!creature.fighter.equippedMoves.includes(moveId)) {
+			this.send(socket, { type: 'error', message: 'That creature does not have this move equipped.' });
+			return;
+		}
+		if (!canUseMove(creature.fighter, moveId)) {
+			const cost = effectiveEnergyCost(creature.fighter, moveId);
+			this.send(socket, {
+				type: 'error',
+				message: `Move unavailable. ${MOVE_LIBRARY[moveId].name} costs ${cost} Energy or is cooling down.`,
+			});
+			return;
+		}
+		await this.lockAction(socket, player, moveId);
 	}
 
 	private async handleBattleAction(socket: WebSocket, player: PlayerNumber, data: ClientMessage) {
@@ -603,13 +903,18 @@ export class BattleRoom extends DurableObject<Env> {
 			return;
 		}
 		if (!canUseMove(creature.fighter, move)) {
-			this.send(socket, { type: 'error', message: `Move unavailable. ${MOVE_LIBRARY[move].name} costs ${effectiveEnergyCost(creature.fighter, move)} Energy or is cooling down.` });
+			this.send(socket, {
+				type: 'error',
+				message: `Move unavailable. ${MOVE_LIBRARY[move].name} costs ${effectiveEnergyCost(creature.fighter, move)} Energy or is cooling down.`,
+			});
 			return;
 		}
 		await this.lockAction(socket, player, move);
 	}
 
-	private async handleRecover(socket: WebSocket, player: PlayerNumber) { await this.lockAction(socket,player,'recover'); }
+	private async handleRecover(socket: WebSocket, player: PlayerNumber) {
+		await this.lockAction(socket, player, 'recover');
+	}
 
 	async fetch(request: Request): Promise<Response> {
 		if (request.headers.get('Upgrade') !== 'websocket') {
@@ -633,7 +938,9 @@ export class BattleRoom extends DurableObject<Env> {
 		}
 
 		if (!player) {
-			const availableIndex = state.sessionTokens.findIndex((token, index) => token === null && !reservedPlayers.includes((index + 1) as PlayerNumber));
+			const availableIndex = state.sessionTokens.findIndex(
+				(token, index) => token === null && !reservedPlayers.includes((index + 1) as PlayerNumber),
+			);
 			if (availableIndex < 0) return new Response('Battle room is full', { status: 409 });
 			player = (availableIndex + 1) as PlayerNumber;
 			sessionToken = generateSessionToken();
@@ -698,7 +1005,11 @@ export class BattleRoom extends DurableObject<Env> {
 				return;
 			}
 
-			this.send(socket, { type: 'hello-reject', message: 'Client handshake required before battle messages.', connectionProtocol: CONNECTION_PROTOCOL });
+			this.send(socket, {
+				type: 'hello-reject',
+				message: 'Client handshake required before battle messages.',
+				connectionProtocol: CONNECTION_PROTOCOL,
+			});
 			return;
 		}
 
@@ -712,12 +1023,13 @@ export class BattleRoom extends DurableObject<Env> {
 			return;
 		}
 
-		if (data.type === 'import-creature') { await this.handleCreatureImport(socket, attachment.player, data.creature, false); return; }
+		if (data.type === 'import-creature') {
+			await this.handleCreatureImport(socket, attachment.player, data.creature, false);
+			return;
+		}
 
-		if (data.type === 'creature-snapshot') { await this.handleCreatureImport(socket, attachment.player, data.creature, true); return; }
-
-		if (data.type === 'ready') {
-			await this.handleReady(socket, attachment.player);
+		if (data.type === 'creature-snapshot') {
+			await this.handleCreatureImport(socket, attachment.player, data.creature, true);
 			return;
 		}
 
@@ -736,7 +1048,10 @@ export class BattleRoom extends DurableObject<Env> {
 			return;
 		}
 
-		if (data.type === 'battle-action') { await this.handleBattleAction(socket, attachment.player, data); return; }
+		if (data.type === 'battle-action') {
+			await this.handleBattleAction(socket, attachment.player, data);
+			return;
+		}
 
 		if (data.type === 'recover') await this.handleRecover(socket, attachment.player);
 	}
@@ -751,7 +1066,12 @@ export class BattleRoom extends DurableObject<Env> {
 			state.disconnectDeadlines[attachment.player - 1] = null;
 			state.connectionIds[attachment.player - 1] = null;
 			this.resetInterruptedBattle(state, `Player ${attachment.player} left the battle room.`);
-			this.addEvent(state, { type: 'session_expired', player: attachment.player, round: 0, message: `Player ${attachment.player} left the battle room.` });
+			this.addEvent(state, {
+				type: 'session_expired',
+				player: attachment.player,
+				round: 0,
+				message: `Player ${attachment.player} left the battle room.`,
+			});
 			await this.ctx.storage.put('state', state);
 			await this.scheduleReconnectAlarm(state);
 			await this.broadcastState(state);
@@ -789,7 +1109,11 @@ export class BattleRoom extends DurableObject<Env> {
 
 		state.disconnectDeadlines[attachment.player - 1] = Date.now() + RECONNECT_GRACE_MS;
 		this.addLog(state, `Player ${attachment.player} disconnected. Waiting up to ${RECONNECT_GRACE_MS / 1000} seconds for reconnection.`);
-		this.addEvent(state, { type: 'disconnect', player: attachment.player, message: `Player ${attachment.player} disconnected. Reconnect window started.` });
+		this.addEvent(state, {
+			type: 'disconnect',
+			player: attachment.player,
+			message: `Player ${attachment.player} disconnected. Reconnect window started.`,
+		});
 		await this.ctx.storage.put('state', state);
 		await this.scheduleReconnectAlarm(state);
 		await this.broadcastState(state);
@@ -816,7 +1140,6 @@ export class BattleRoom extends DurableObject<Env> {
 
 		await this.scheduleReconnectAlarm(state);
 	}
-
 }
 
 function generateRoomCode(): string {
