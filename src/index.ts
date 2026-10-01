@@ -170,7 +170,7 @@ const REQUIRED_CLIENT_CAPABILITIES: ClientCapability[] = [
 const CONNECTION_PROTOCOL = {
 	name: 'demonym-connect-v1',
 	version: 1,
-	serverVersion: '0.3.2.2',
+	serverVersion: '0.3.2.3',
 	requiredCapabilities: REQUIRED_CLIENT_CAPABILITIES,
 	supportedClientTypes: ['web', 'cardputer'] as ClientType[],
 	aliases: ['demonym-connect'],
@@ -478,11 +478,22 @@ export class BattleRoom extends DurableObject<Env> {
 		this.addLog(state, message);
 	}
 
+	private restoreConnectedOpponentAfterReset(state: BattleState, departedPlayer: PlayerNumber) {
+		const connected = new Set(this.getConnectedPlayers());
+		for (const player of [1, 2] as PlayerNumber[]) {
+			if (player === departedPlayer) continue;
+			if (connected.has(player) && state.sessionTokens[player - 1] !== null) {
+				state.ready[player - 1] = true;
+			}
+		}
+	}
+
 	private async expirePlayerSession(state: BattleState, player: PlayerNumber, message: string) {
 		state.sessionTokens[player - 1] = null;
 		state.disconnectDeadlines[player - 1] = null;
 		state.connectionIds[player - 1] = null;
 		this.resetInterruptedBattle(state, message);
+		this.restoreConnectedOpponentAfterReset(state, player);
 		this.addEvent(state, { type: 'session_expired', player, round: 0, message });
 	}
 
@@ -1066,6 +1077,7 @@ export class BattleRoom extends DurableObject<Env> {
 			state.disconnectDeadlines[attachment.player - 1] = null;
 			state.connectionIds[attachment.player - 1] = null;
 			this.resetInterruptedBattle(state, `Player ${attachment.player} left the battle room.`);
+			this.restoreConnectedOpponentAfterReset(state, attachment.player);
 			this.addEvent(state, {
 				type: 'session_expired',
 				player: attachment.player,

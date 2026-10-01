@@ -523,6 +523,9 @@
 					<div id="rematch-state"></div>
 				</div>
 				<div id="status">Connecting...</div>
+				<div class="payload-actions">
+					<button id="leave-match" type="button">LEAVE MATCH</button>
+				</div>
 				<div id="moves"></div>
 
 				<div class="log">
@@ -531,7 +534,7 @@
 				</div>
 
 				<div class="note">
-					v0.3.2.2 room/readiness cleanup. Browser and Cardputer payloads now resolve through Battle Rules v19 while the 60-second
+					v0.3.2.3 reconnect/recovery hotfix. Browser and Cardputer payloads now resolve through Battle Rules v19 while the 60-second
 					session-resume loop remains intact.
 				</div>
 			</section>
@@ -567,6 +570,7 @@
 			const resultCopy = document.querySelector('#result-copy');
 			const rematchButton = document.querySelector('#rematch');
 			const newBattleButton = document.querySelector('#new-battle');
+			const leaveMatchButton = document.querySelector('#leave-match');
 			const rematchState = document.querySelector('#rematch-state');
 			const battleLog = document.querySelector('#battle-log');
 			const player1Card = document.querySelector('#player-1');
@@ -664,7 +668,7 @@
 
 			function sendClientHello() {
 				if (!connectionProtocol) return;
-				const version = requestedClientType === 'cardputer' ? 'browser-mock-0.3.2.2' : 'web-0.3.2.2';
+				const version = requestedClientType === 'cardputer' ? 'browser-mock-0.3.2.3' : 'web-0.3.2.3';
 				sendMessage({
 					type: 'client-hello',
 					protocol: connectionProtocol.name,
@@ -1230,6 +1234,21 @@
 				sendMessage({ type: 'select-lineage', lineage: raw.charAt(0).toUpperCase() + raw.slice(1) });
 			});
 			rematchButton.addEventListener('click', () => sendMessage({ type: 'rematch' }));
+			leaveMatchButton.addEventListener('click', () => {
+				intentionalClose = true;
+				clearReconnectTimer();
+				sessionStorage.removeItem(ACTIVE_ROOM_KEY);
+				if (currentRoomCode) {
+					sessionStorage.removeItem(sessionStorageKey(currentRoomCode));
+					sessionStorage.removeItem(clientModeStorageKey(currentRoomCode));
+				}
+				if (socket?.readyState === WebSocket.OPEN) {
+					sendMessage({ type: 'leave' });
+					setTimeout(() => location.reload(), 120);
+				} else {
+					location.reload();
+				}
+			});
 			newBattleButton.addEventListener('click', () => {
 				intentionalClose = true;
 				clearReconnectTimer();
