@@ -335,6 +335,10 @@ export class BattleRoom extends DurableObject<Env> {
 		}
 	}
 
+	private addVerboseLog(state: BattleState, message: string) {
+		this.addLog(state, `[verbose] ${message}`);
+	}
+
 	private addEvent(state: BattleState, event: Omit<BattleEvent, 'id' | 'round'> & { round?: number }) {
 		state.eventSeq += 1;
 		const authored: BattleEvent = { id: state.eventSeq, round: event.round ?? state.round, ...event };
@@ -558,6 +562,10 @@ export class BattleRoom extends DurableObject<Env> {
 	}
 
 	private async handleClientHello(socket: WebSocket, data: ClientMessage, attachment: SocketAttachment) {
+		const diagnosticState = await this.getState();
+		this.addVerboseLog(diagnosticState, `P${attachment.player} client hello received (${attachment.resumed ? 'resume' : 'fresh'} socket).`);
+		await this.ctx.storage.put('state', diagnosticState);
+
 		if (attachment.handshakeComplete) {
 			this.send(socket, { type: 'error', message: 'Client handshake is already complete.' });
 			return;
@@ -565,6 +573,9 @@ export class BattleRoom extends DurableObject<Env> {
 
 		const result = this.parseClientHello(data);
 		if (result.ok === false) {
+			const rejectedState = await this.getState();
+			this.addVerboseLog(rejectedState, `P${attachment.player} hello rejected: ${result.error}`);
+			await this.ctx.storage.put('state', rejectedState);
 			this.send(socket, {
 				type: 'hello-reject',
 				message: result.error,
@@ -594,7 +605,9 @@ export class BattleRoom extends DurableObject<Env> {
 
 		const state = await this.getState();
 		state.disconnectDeadlines[attachment.player - 1] = null;
+		this.addVerboseLog(state, `P${attachment.player} hello accepted; sending authoritative room state.`);
 		if (attachment.resumed) {
+			this.addVerboseLog(state, `P${attachment.player} session resume accepted.`);
 			this.addLog(state, `Player ${attachment.player} reconnected and resumed their session.`);
 			this.addEvent(state, { type: 'reconnect', player: attachment.player, message: `Player ${attachment.player} reconnected.` });
 		}
@@ -936,6 +949,9 @@ export class BattleRoom extends DurableObject<Env> {
 		const requestedSession = url.searchParams.get('session')?.trim() || null;
 		const state = await this.getState();
 		const reservedPlayers = this.getReservedPlayers();
+		if (requestedSession) {
+			this.addVerboseLog(state, 'Resume WebSocket request received with a saved session token.');
+		}
 		let player: PlayerNumber | null = null;
 		let sessionToken = requestedSession;
 		let resumed = false;
@@ -945,6 +961,9 @@ export class BattleRoom extends DurableObject<Env> {
 			if (matchIndex >= 0) {
 				player = (matchIndex + 1) as PlayerNumber;
 				resumed = true;
+				this.addVerboseLog(state, `P${player} resume token matched reserved session.`);
+			} else {
+				this.addVerboseLog(state, 'Resume token did not match an active session.');
 			}
 		}
 
@@ -952,7 +971,13 @@ export class BattleRoom extends DurableObject<Env> {
 			const availableIndex = state.sessionTokens.findIndex(
 				(token, index) => token === null && !reservedPlayers.includes((index + 1) as PlayerNumber),
 			);
-			if (availableIndex < 0) return new Response('Battle room is full', { status: 409 });
+			if (availableIndex < 0) {
+				if (requestedSession) {
+					this.addVerboseLog(state, 'Resume request rejected: token mismatch and no player slot is available.');
+					await this.ctx.storage.put('state', state);
+				}
+				return new Response('Battle room is full', { status: 409 });
+			}
 			player = (availableIndex + 1) as PlayerNumber;
 			sessionToken = generateSessionToken();
 			state.sessionTokens[availableIndex] = sessionToken;
@@ -966,6 +991,7 @@ export class BattleRoom extends DurableObject<Env> {
 		const connectionId = generateSessionToken();
 		state.connectionIds[player - 1] = connectionId;
 		state.disconnectDeadlines[player - 1] = null;
+		this.addVerboseLog(state, `P${player} WebSocket accepted as ${resumed ? 'resume' : 'fresh'} connection; awaiting client hello.`);
 		await this.ctx.storage.put('state', state);
 
 		const pair = new WebSocketPair();

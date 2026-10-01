@@ -338,6 +338,10 @@
 			#battle-log li {
 				margin-bottom: 6px;
 			}
+			#battle-log li.verbose {
+				display: list-item; /* Diagnostic build: change to none for basic/release logging. */
+				opacity: 0.68;
+			}
 			.note {
 				margin-top: 18px;
 				opacity: 0.55;
@@ -1097,7 +1101,13 @@
 				battleLog.innerHTML = '';
 				for (const entry of state.log) {
 					const item = document.createElement('li');
-					item.textContent = entry;
+					const verbosePrefix = '[verbose] ';
+					if (entry.startsWith(verbosePrefix)) {
+						item.classList.add('verbose');
+						item.textContent = entry.slice(verbosePrefix.length);
+					} else {
+						item.textContent = entry;
+					}
 					battleLog.append(item);
 				}
 				battleLog.scrollTop = battleLog.scrollHeight;
