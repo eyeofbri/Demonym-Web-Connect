@@ -595,7 +595,19 @@ export class BattleRoom extends DurableObject<Env> {
 				resumed = true;
 				this.addVerboseLog(state, `P${player} resume token matched reserved session from client hello.`);
 			} else {
-				this.addVerboseLog(state, 'Client-hello resume token did not match an active session.');
+				// A client that explicitly presents a saved token is asking to resume,
+				// not to consume a newly-opened player slot. This distinction lets
+				// Cardputer safely persist sessions across reboot without an expired
+				// token silently starting a brand-new battle.
+				this.addVerboseLog(state, 'Client-hello resume rejected: saved session is no longer active.');
+				await this.ctx.storage.put('state', state);
+				this.send(socket, {
+					type: 'session-expired',
+					message: 'SESSION EXPIRED',
+					connectionProtocol: CONNECTION_PROTOCOL,
+				});
+				socket.close(1008, 'Session expired');
+				return;
 			}
 		}
 
