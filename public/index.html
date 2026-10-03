@@ -709,6 +709,7 @@
 					clientType: requestedClientType,
 					clientVersion: version,
 					capabilities: CLIENT_CAPABILITIES,
+					...(sessionToken ? { sessionToken } : {}),
 				});
 			}
 
@@ -883,8 +884,7 @@
 
 				showBattle(code);
 				const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-				const sessionQuery = sessionToken ? `?session=${encodeURIComponent(sessionToken)}` : '';
-				const ws = new WebSocket(`${protocol}://${location.host}/api/rooms/${code}/ws${sessionQuery}`);
+				const ws = new WebSocket(`${protocol}://${location.host}/api/rooms/${code}/ws`);
 				socket = ws;
 
 				ws.addEventListener('open', () => {

@@ -105,12 +105,12 @@ interface ClientInfo {
 	capabilities: ClientCapability[];
 }
 interface SocketAttachment {
-	player: PlayerNumber;
+	player: PlayerNumber | null;
 	handshakeComplete: boolean;
-	sessionToken: string;
+	sessionToken: string | null;
 	resumed: boolean;
 	clientInfo?: ClientInfo;
-	connectionId: string;
+	connectionId: string | null;
 }
 interface ClientMessage {
 	type?: string;
@@ -122,6 +122,7 @@ interface ClientMessage {
 	clientType?: string;
 	clientVersion?: string;
 	capabilities?: unknown;
+	sessionToken?: string;
 	round?: number;
 	action?: { kind?: string; slot?: number };
 }
@@ -320,7 +321,7 @@ export class BattleRoom extends DurableObject<Env> {
 			.filter((attachment): attachment is SocketAttachment =>
 				Boolean(attachment?.player && attachment.handshakeComplete && attachment.clientInfo),
 			)
-			.map((attachment) => ({ player: attachment.player, ...attachment.clientInfo }))
+			.map((attachment) => ({ player: attachment.player!, ...attachment.clientInfo! }))
 			.sort((a, b) => a.player - b.player);
 	}
 
@@ -562,10 +563,6 @@ export class BattleRoom extends DurableObject<Env> {
 	}
 
 	private async handleClientHello(socket: WebSocket, data: ClientMessage, attachment: SocketAttachment) {
-		const diagnosticState = await this.getState();
-		this.addVerboseLog(diagnosticState, `P${attachment.player} client hello received (${attachment.resumed ? 'resume' : 'fresh'} socket).`);
-		await this.ctx.storage.put('state', diagnosticState);
-
 		if (attachment.handshakeComplete) {
 			this.send(socket, { type: 'error', message: 'Client handshake is already complete.' });
 			return;
@@ -573,9 +570,6 @@ export class BattleRoom extends DurableObject<Env> {
 
 		const result = this.parseClientHello(data);
 		if (result.ok === false) {
-			const rejectedState = await this.getState();
-			this.addVerboseLog(rejectedState, `P${attachment.player} hello rejected: ${result.error}`);
-			await this.ctx.storage.put('state', rejectedState);
 			this.send(socket, {
 				type: 'hello-reject',
 				message: result.error,
@@ -585,38 +579,90 @@ export class BattleRoom extends DurableObject<Env> {
 			return;
 		}
 
+		const state = await this.getState();
+		const helloSession = typeof data.sessionToken === 'string' ? data.sessionToken.trim() : '';
+		const requestedSession = helloSession || attachment.sessionToken || '';
+		let player: PlayerNumber | null = null;
+		let sessionToken: string | null = null;
+		let resumed = false;
+
+		if (requestedSession) {
+			this.addVerboseLog(state, 'Client hello contains saved resume credentials.');
+			const matchIndex = state.sessionTokens.findIndex((token) => token === requestedSession);
+			if (matchIndex >= 0) {
+				player = (matchIndex + 1) as PlayerNumber;
+				sessionToken = requestedSession;
+				resumed = true;
+				this.addVerboseLog(state, `P${player} resume token matched reserved session from client hello.`);
+			} else {
+				this.addVerboseLog(state, 'Client-hello resume token did not match an active session.');
+			}
+		}
+
+		if (!player) {
+			const reservedPlayers = this.getReservedPlayers();
+			const availableIndex = state.sessionTokens.findIndex(
+				(token, index) => token === null && !reservedPlayers.includes((index + 1) as PlayerNumber),
+			);
+			if (availableIndex < 0) {
+				this.addVerboseLog(state, requestedSession
+					? 'Client-hello resume rejected: token mismatch and no player slot is available.'
+					: 'Fresh client hello rejected: no player slot is available.');
+				await this.ctx.storage.put('state', state);
+				this.send(socket, { type: 'hello-reject', message: 'Battle room is full', connectionProtocol: CONNECTION_PROTOCOL });
+				socket.close(1008, 'Battle room is full');
+				return;
+			}
+			player = (availableIndex + 1) as PlayerNumber;
+			sessionToken = generateSessionToken();
+			state.sessionTokens[availableIndex] = sessionToken;
+		}
+
+		const connectionId = generateSessionToken();
+		state.connectionIds[player - 1] = connectionId;
+		state.disconnectDeadlines[player - 1] = null;
+
 		const updatedAttachment: SocketAttachment = {
-			player: attachment.player,
+			player,
 			handshakeComplete: true,
-			sessionToken: attachment.sessionToken,
-			resumed: attachment.resumed,
+			sessionToken,
+			resumed,
 			clientInfo: result.info,
-			connectionId: attachment.connectionId,
+			connectionId,
 		};
 		socket.serializeAttachment(updatedAttachment);
 
-		this.send(socket, {
-			type: 'hello-ack',
-			player: attachment.player,
-			client: result.info,
-			resumed: attachment.resumed,
-			connectionProtocol: CONNECTION_PROTOCOL,
-		});
+		if (resumed) {
+			for (const existingSocket of this.ctx.getWebSockets()) {
+				if (existingSocket === socket) continue;
+				const existingAttachment = existingSocket.deserializeAttachment() as SocketAttachment | null;
+				if (existingAttachment?.player === player && existingAttachment.sessionToken === sessionToken) {
+					existingSocket.close(4001, 'Session resumed by a newer connection');
+				}
+			}
+		}
 
-		const state = await this.getState();
-		state.disconnectDeadlines[attachment.player - 1] = null;
-		this.addVerboseLog(state, `P${attachment.player} hello accepted; sending authoritative room state.`);
-		if (attachment.resumed) {
-			this.addVerboseLog(state, `P${attachment.player} session resume accepted.`);
-			this.addLog(state, `Player ${attachment.player} reconnected and resumed their session.`);
-			this.addEvent(state, { type: 'reconnect', player: attachment.player, message: `Player ${attachment.player} reconnected.` });
+		this.addVerboseLog(state, `P${player} client hello accepted as ${resumed ? 'resume' : 'fresh'} session.`);
+		if (resumed) {
+			this.addVerboseLog(state, `P${player} session resume accepted.`);
+			this.addLog(state, `Player ${player} reconnected and resumed their session.`);
+			this.addEvent(state, { type: 'reconnect', player, message: `Player ${player} reconnected.` });
 		}
 		await this.ctx.storage.put('state', state);
 		await this.scheduleReconnectAlarm(state);
-		this.sendState(socket, state, attachment.player, 'welcome');
+
+		this.send(socket, {
+			type: 'hello-ack',
+			player,
+			client: result.info,
+			sessionToken,
+			resumed,
+			connectionProtocol: CONNECTION_PROTOCOL,
+		});
+		this.sendState(socket, state, player, 'welcome');
 		await this.broadcastState(state);
-		if (!attachment.resumed && result.info.clientType === 'web') {
-			await this.establishPlayer(socket, attachment.player);
+		if (!resumed && result.info.clientType === 'web') {
+			await this.establishPlayer(socket, player);
 		}
 	}
 
@@ -946,75 +992,25 @@ export class BattleRoom extends DurableObject<Env> {
 		}
 
 		const url = new URL(request.url);
-		const requestedSession = url.searchParams.get('session')?.trim() || null;
-		const state = await this.getState();
-		const reservedPlayers = this.getReservedPlayers();
-		if (requestedSession) {
-			this.addVerboseLog(state, 'Resume WebSocket request received with a saved session token.');
-		}
-		let player: PlayerNumber | null = null;
-		let sessionToken = requestedSession;
-		let resumed = false;
-
-		if (requestedSession) {
-			const matchIndex = state.sessionTokens.findIndex((token) => token === requestedSession);
-			if (matchIndex >= 0) {
-				player = (matchIndex + 1) as PlayerNumber;
-				resumed = true;
-				this.addVerboseLog(state, `P${player} resume token matched reserved session.`);
-			} else {
-				this.addVerboseLog(state, 'Resume token did not match an active session.');
-			}
-		}
-
-		if (!player) {
-			const availableIndex = state.sessionTokens.findIndex(
-				(token, index) => token === null && !reservedPlayers.includes((index + 1) as PlayerNumber),
-			);
-			if (availableIndex < 0) {
-				if (requestedSession) {
-					this.addVerboseLog(state, 'Resume request rejected: token mismatch and no player slot is available.');
-					await this.ctx.storage.put('state', state);
-				}
-				return new Response('Battle room is full', { status: 409 });
-			}
-			player = (availableIndex + 1) as PlayerNumber;
-			sessionToken = generateSessionToken();
-			state.sessionTokens[availableIndex] = sessionToken;
-		}
-
-		if (!sessionToken) return new Response('Unable to create player session', { status: 500 });
-
-		// Every socket connection gets its own generation id. A resumed connection
-		// replaces the previous generation before that old socket can report a
-		// disconnect, preventing a refresh/reconnect race from pausing the room.
-		const connectionId = generateSessionToken();
-		state.connectionIds[player - 1] = connectionId;
-		state.disconnectDeadlines[player - 1] = null;
-		this.addVerboseLog(state, `P${player} WebSocket accepted as ${resumed ? 'resume' : 'fresh'} connection; awaiting client hello.`);
-		await this.ctx.storage.put('state', state);
+		const legacyQuerySession = url.searchParams.get('session')?.trim() || null;
 
 		const pair = new WebSocketPair();
 		const [client, server] = Object.values(pair);
-
 		this.ctx.acceptWebSocket(server);
-		server.serializeAttachment({ player, handshakeComplete: false, sessionToken, resumed, connectionId } satisfies SocketAttachment);
 
-		if (resumed) {
-			for (const existingSocket of this.ctx.getWebSockets()) {
-				if (existingSocket === server) continue;
-				const existingAttachment = existingSocket.deserializeAttachment() as SocketAttachment | null;
-				if (existingAttachment?.player === player && existingAttachment.sessionToken === sessionToken) {
-					existingSocket.close(4001, 'Session resumed by a newer connection');
-				}
-			}
-		}
+		// Do not allocate a player slot at HTTP upgrade time. The Cardputer now
+		// always uses the plain /ws endpoint and presents any saved resume token
+		// in client-hello, so session ownership is resolved after the socket opens.
+		server.serializeAttachment({
+			player: null,
+			handshakeComplete: false,
+			sessionToken: legacyQuerySession,
+			resumed: false,
+			connectionId: null,
+		} satisfies SocketAttachment);
 
 		this.send(server, {
 			type: 'hello-required',
-			player,
-			sessionToken,
-			resumed,
 			reconnectGraceMs: RECONNECT_GRACE_MS,
 			connectionProtocol: CONNECTION_PROTOCOL,
 		});
@@ -1026,7 +1022,7 @@ export class BattleRoom extends DurableObject<Env> {
 		if (typeof message !== 'string') return;
 
 		const attachment = socket.deserializeAttachment() as SocketAttachment | null;
-		if (!attachment?.player) return;
+		if (!attachment) return;
 
 		let data: ClientMessage;
 		try {
@@ -1047,6 +1043,11 @@ export class BattleRoom extends DurableObject<Env> {
 				message: 'Client handshake required before battle messages.',
 				connectionProtocol: CONNECTION_PROTOCOL,
 			});
+			return;
+		}
+
+		if (!attachment.player) {
+			this.send(socket, { type: 'error', message: 'Player session was not assigned.' });
 			return;
 		}
 
@@ -1094,6 +1095,10 @@ export class BattleRoom extends DurableObject<Env> {
 	}
 
 	private async handleLeave(socket: WebSocket, attachment: SocketAttachment) {
+		if (!attachment.player || !attachment.sessionToken || !attachment.connectionId) {
+			socket.close(1000, 'Player left room');
+			return;
+		}
 		const state = await this.getState();
 		if (
 			state.sessionTokens[attachment.player - 1] === attachment.sessionToken &&
