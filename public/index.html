@@ -471,6 +471,10 @@
 			#copy-battle-log,#copy-log-simple,#copy-log-verbose{color:var(--signal-strong)}
 			@media(max-width:620px){main{width:min(100% - 18px,920px);padding:9px 0}.lobby,#battle{padding:15px;border-radius:12px}.creatures{grid-template-columns:1fr}.round-panel{grid-template-columns:1fr}}
 
+		
+			.creature-sprite{display:block;width:144px;height:144px;margin:8px auto 12px;image-rendering:pixelated;background:radial-gradient(circle,rgba(86,214,201,.08),transparent 68%);border-radius:12px}
+			.creature.active .creature-sprite{filter:drop-shadow(0 0 8px rgba(86,214,201,.45))}
+			.creature-name{text-align:center;color:var(--signal-strong);font-weight:700;margin-bottom:8px}
 		</style>
 	</head>
 	<body>
@@ -506,7 +510,7 @@
 				<div class="creatures">
 					<div id="player-1" class="creature">
 						<strong>PLAYER 1</strong>
-						<div id="name-1" class="creature-name">WAITING</div>
+						<canvas id="sprite-1" class="creature-sprite" width="192" height="192"></canvas>\n\t\t\t\t\t\t<div id="name-1" class="creature-name">WAITING</div>
 						<div>Lineage: <span id="lineage-1">—</span></div>
 						<div class="source-line">Source: <span id="source-1">—</span></div>
 						<div class="source-line">Client: <span id="client-1">WAITING</span></div>
@@ -517,7 +521,7 @@
 
 					<div id="player-2" class="creature">
 						<strong>PLAYER 2</strong>
-						<div id="name-2" class="creature-name">WAITING</div>
+						<canvas id="sprite-2" class="creature-sprite" width="192" height="192"></canvas>\n\t\t\t\t\t\t<div id="name-2" class="creature-name">WAITING</div>
 						<div>Lineage: <span id="lineage-2">—</span></div>
 						<div class="source-line">Source: <span id="source-2">—</span></div>
 						<div class="source-line">Client: <span id="client-2">WAITING</span></div>
@@ -1013,9 +1017,29 @@
 				});
 			}
 
+
+			function signalHash(value) {
+				value = (value ^ 61) ^ (value >>> 16); value = Math.imul(value, 9);
+				value ^= value >>> 4; value = Math.imul(value, 0x27d4eb2d);
+				return (value ^ (value >>> 15)) >>> 0;
+			}
+			function renderSignalSprite(player, creature) {
+				const canvas=document.querySelector(`#sprite-${player}`); if(!canvas)return;
+				const ctx=canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width,canvas.height);
+				if(!creature?.payload)return;
+				const seed=Number(creature.payload.visualSeed??1)>>>0, lineage=String(creature.payload.lineage??'wisp'), form=String(creature.payload.form??'static');
+				const palette={husk:['#8ff0e6','#527080'],mire:['#83d98d','#3c7654'],wisp:['#b9a7ff','#675da8'],fang:['#ff9f8f','#9b5048'],choir:['#f0b3e6','#925f8a'],machine:['#9dd7e8','#557d8a'],cinder:['#ffb36b','#a75c35'],veil:['#a9b6ff','#5d669b']}[lineage]??['#8ff0e6','#527080'];
+				const px=5,ox=16,oy=16,cells=[];
+				for(let y=2;y<28;y++)for(let x=3;x<16;x++){const n=signalHash(seed^Math.imul(x+11,0x45d9f3b)^Math.imul(y+7,0x119de1f3));const dx=(x-12)/10,dy=(y-15)/13;if(dx*dx+dy*dy<.78+((n>>>28)&3)*.035&&(n&7)!==0){cells.push([x,y,(n>>>8)&3]);cells.push([31-x,y,(n>>>8)&3])}}
+				if(form==='feral')cells.push([7,8,0],[24,8,0],[6,9,0],[25,9,0]); if(form==='static')cells.push([10,2,1],[21,2,1],[9,3,1],[22,3,1]);
+				cells.forEach(([x,y,c])=>{ctx.fillStyle=c===0?palette[0]:palette[1];ctx.fillRect(ox+x*px,oy+y*px,px,px)});
+				ctx.fillStyle='#eef7f6';ctx.fillRect(ox+11*px,oy+12*px,2*px,2*px);ctx.fillRect(ox+19*px,oy+12*px,2*px,2*px);
+			}
+
 			function renderCreature(player) {
 				const connected = connectedPlayers.includes(player);
 				if (!connected) {
+					const canvas=document.querySelector(`#sprite-${player}`); if(canvas)canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
 					setText(`#name-${player}`, 'WAITING');
 					setText(`#lineage-${player}`, '—');
 					setText(`#source-${player}`, '—');
@@ -1029,6 +1053,7 @@
 				}
 
 				const creature = state.players[player - 1];
+				renderSignalSprite(player, creature);
 				setText(`#name-${player}`, creature.payload.name);
 				setText(`#lineage-${player}`, creature.payload.lineage.charAt(0).toUpperCase() + creature.payload.lineage.slice(1));
 				setText(`#source-${player}`, creature.payload.source === 'cardputer' ? 'CARDPUTER PAYLOAD' : 'WEB TEST');

@@ -402,6 +402,8 @@ export class BattleRoom extends DurableObject<Env> {
 	private sendCompactState(socket: WebSocket, state: BattleState, player: PlayerNumber) {
 		const opponent = otherPlayer(player);
 		const connected = this.getConnectedPlayers();
+		const own = state.players[player - 1];
+		const rival = state.players[opponent - 1];
 		this.send(socket, {
 			type: 'room-state',
 			player,
@@ -416,6 +418,16 @@ export class BattleRoom extends DurableObject<Env> {
 			winner: state.winner,
 			matchNumber: state.matchNumber,
 			eventSeq: state.eventSeq,
+			ownHp: own.hp, ownMaxHp: own.fighter.maxHp,
+			ownEnergy: own.energy, ownMaxEnergy: own.fighter.maxEnergy,
+			ownLevel: own.payload.level,
+			opponentHp: rival.hp, opponentMaxHp: rival.fighter.maxHp,
+			opponentEnergy: rival.energy, opponentMaxEnergy: rival.fighter.maxEnergy,
+			opponentLevel: rival.payload.level,
+			opponentVisualSeed: rival.payload.visualSeed,
+			opponentLineage: rival.payload.lineage,
+			opponentForm: rival.payload.form,
+			opponentName: rival.payload.name,
 		});
 	}
 
