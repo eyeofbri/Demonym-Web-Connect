@@ -50,7 +50,8 @@ type ClientCapability =
 	| 'recover-action-v1'
 	| 'rematch-v1'
 	| 'session-resume-v1'
-	| 'compact-state-v1';
+	| 'compact-state-v1'
+	| 'visual-relay-v1';
 
 interface StatusState {
 	id: StatusId;
@@ -124,6 +125,7 @@ interface ClientMessage {
 	height?: number;
 	pixels?: string;
 	palette?: string;
+	targetPlayer?: number;
 	type?: string;
 	moveId?: string;
 	lineage?: string;
@@ -185,7 +187,7 @@ const REQUIRED_CLIENT_CAPABILITIES: ClientCapability[] = [
 const CONNECTION_PROTOCOL = {
 	name: 'demonym-connect-v1',
 	version: 1,
-	serverVersion: '0.3.2.5',
+	serverVersion: '0.3.2.6',
 	requiredCapabilities: REQUIRED_CLIENT_CAPABILITIES,
 	supportedClientTypes: ['web', 'cardputer'] as ClientType[],
 	aliases: ['demonym-connect'],
@@ -472,6 +474,32 @@ export class BattleRoom extends DurableObject<Env> {
 		});
 	}
 
+
+	private requestMissingOpponentVisuals(state: BattleState) {
+		for (const socket of this.ctx.getWebSockets()) {
+			const attachment = socket.deserializeAttachment() as SocketAttachment | null;
+			if (
+				!attachment?.player ||
+				!attachment.handshakeComplete ||
+				attachment.clientInfo?.clientType !== 'cardputer' ||
+				!attachment.clientInfo.capabilities.includes('visual-relay-v1')
+			)
+				continue;
+
+			const opponent = otherPlayer(attachment.player);
+			const creature = state.players[opponent - 1];
+			if (creature.visual) continue;
+			this.send(socket, {
+				type: 'creature-visual-request',
+				player: opponent,
+				visualSeed: creature.payload.visualSeed,
+				lineage: creature.payload.lineage,
+				form: creature.payload.form,
+				name: creature.payload.name,
+			});
+		}
+	}
+
 	private sendState(socket: WebSocket, state: BattleState, player: PlayerNumber, type: 'welcome' | 'state' = 'state') {
 		// Physical Cardputers opt into compact room-state records. The browser and
 		// Cardputer Mock intentionally retain the full state envelope so the
@@ -502,6 +530,7 @@ export class BattleRoom extends DurableObject<Env> {
 			if (!attachment?.player || !attachment.handshakeComplete) continue;
 			this.sendState(socket, state, attachment.player);
 		}
+		this.requestMissingOpponentVisuals(state);
 	}
 
 	private connectedPlayerCount(): number {
@@ -548,9 +577,13 @@ export class BattleRoom extends DurableObject<Env> {
 	private resetInterruptedBattle(state: BattleState, message: string) {
 		const player1Payload = structuredClone(state.players[0].payload);
 		const player2Payload = structuredClone(state.players[1].payload);
+		const player1Visual = state.players[0].visual ? structuredClone(state.players[0].visual) : undefined;
+		const player2Visual = state.players[1].visual ? structuredClone(state.players[1].visual) : undefined;
 		const completedMatch = state.winner !== null;
 
 		state.players = [createCreatureFromPayload(player1Payload), createCreatureFromPayload(player2Payload)];
+		state.players[0].visual = player1Visual;
+		state.players[1].visual = player2Visual;
 		state.ready = [false, false];
 		state.started = false;
 		state.phase = 'waiting';
@@ -590,8 +623,12 @@ export class BattleRoom extends DurableObject<Env> {
 	private resetForRematch(state: BattleState) {
 		const player1Payload = structuredClone(state.players[0].payload);
 		const player2Payload = structuredClone(state.players[1].payload);
+		const player1Visual = state.players[0].visual ? structuredClone(state.players[0].visual) : undefined;
+		const player2Visual = state.players[1].visual ? structuredClone(state.players[1].visual) : undefined;
 
 		state.players = [createCreatureFromPayload(player1Payload), createCreatureFromPayload(player2Payload)];
+		state.players[0].visual = player1Visual;
+		state.players[1].visual = player2Visual;
 		state.ready = [false, false];
 		state.started = false;
 		state.phase = 'waiting';
@@ -1188,20 +1225,40 @@ export class BattleRoom extends DurableObject<Env> {
 
 		if (data.type === 'creature-visual') {
 			const state = await this.getState();
+			const requestedTarget = Number(data.targetPlayer);
+			const targetPlayer =
+				requestedTarget === 1 || requestedTarget === 2 ? (requestedTarget as PlayerNumber) : attachment.player;
+			const isRelayedOpponent = targetPlayer !== attachment.player;
+			const canRelayOpponent =
+				attachment.clientInfo?.clientType === 'cardputer' && attachment.clientInfo.capabilities.includes('visual-relay-v1');
+
+			if (isRelayedOpponent && !canRelayOpponent) {
+				this.send(socket, { type: 'error', message: 'Opponent visual relay requires visual-relay-v1.' });
+				return;
+			}
+
 			if (
 				data.encoding === 'indexed4-rgb565-v1' &&
-				data.width === 32 && data.height === 32 &&
-				typeof data.pixels === 'string' && /^[0-9A-Fa-f]{1024}$/.test(data.pixels) &&
-				typeof data.palette === 'string' && /^[0-9A-Fa-f]{4}(,[0-9A-Fa-f]{4}){1,15}$/.test(data.palette)
+				data.width === 32 &&
+				data.height === 32 &&
+				typeof data.pixels === 'string' &&
+				/^[0-9A-Fa-f]{1024}$/.test(data.pixels) &&
+				typeof data.palette === 'string' &&
+				/^[0-9A-Fa-f]{4}(,[0-9A-Fa-f]{4}){1,15}$/.test(data.palette)
 			) {
-				state.players[attachment.player - 1].visual = {
-					encoding: 'indexed4-rgb565-v1', width: 32, height: 32,
-					pixels: data.pixels.toUpperCase(), palette: data.palette.toUpperCase(),
+				state.players[targetPlayer - 1].visual = {
+					encoding: 'indexed4-rgb565-v1',
+					width: 32,
+					height: 32,
+					pixels: data.pixels.toUpperCase(),
+					palette: data.palette.toUpperCase(),
 				};
+				if (isRelayedOpponent) this.addVerboseLog(state, `P${attachment.player} relayed native visual for P${targetPlayer}.`);
 				await this.saveAndBroadcast(state);
 			}
 			return;
 		}
+
 		if (data.type === 'creature-snapshot') {
 			await this.handleCreatureImport(socket, attachment.player, data.creature, true);
 			return;
