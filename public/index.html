@@ -487,6 +487,9 @@
 			.creature .stats{max-width:270px;margin:0 auto}
 			@media(max-width:700px){.battle-grid{min-height:310px;padding:18px 6px}.creature-sprite{width:132px;height:132px}.creature:first-child .creature-sprite{transform:translateY(28px)}}
 
+
+			.session-lifecycle{min-height:18px;margin:6px 0 12px;font-size:12px;letter-spacing:.04em;color:var(--muted)}
+			.session-lifecycle.expiring{color:var(--accent-strong)}
 </style>
 	</head>
 	<body>
@@ -581,6 +584,7 @@
 					<div id="rematch-state"></div>
 				</div>
 				<div id="status">Connecting...</div>
+				<div id="session-lifecycle" class="session-lifecycle"></div>
 				<div class="payload-actions">
 					<button id="leave-match" type="button">LEAVE MATCH</button>
 				</div>
@@ -601,7 +605,7 @@
 				</div>
 
 				<div class="note">
-					v0.3.2.3 reconnect/recovery hotfix. Browser and Cardputer payloads now resolve through Battle Rules v19 while the 60-second
+					v0.3.2.5 session lifecycle cleanup. Browser and Cardputer payloads now resolve through Battle Rules v19 while the 60-second
 					session-resume loop remains intact.
 				</div>
 			</section>
@@ -632,6 +636,7 @@
 			const roundPriority = document.querySelector('#round-priority');
 			const roundLockStatus = document.querySelector('#round-lock-status');
 			const status = document.querySelector('#status');
+			const sessionLifecycle = document.querySelector('#session-lifecycle');
 			const resultPanel = document.querySelector('#result-panel');
 			const resultTitle = document.querySelector('#result-title');
 			const resultCopy = document.querySelector('#result-copy');
@@ -1298,6 +1303,25 @@
 				}
 			}
 
+			function formatCountdown(ms) {
+				const total=Math.max(0,Math.ceil(ms/1000)), minutes=Math.floor(total/60), seconds=total%60;
+				return `${minutes}:${String(seconds).padStart(2,'0')}`;
+			}
+			function renderSessionLifecycle() {
+				if (!sessionLifecycle || !state) return;
+				const cleanupAt=state.sessionLifecycle?.cleanupAt;
+				if (typeof cleanupAt === 'number') {
+					const remaining=cleanupAt-Date.now();
+					sessionLifecycle.textContent=remaining>0
+						? `SESSION CLEANUP // ${formatCountdown(remaining)}`
+						: 'SESSION CLEANUP // EXPIRING';
+					sessionLifecycle.classList.add('expiring');
+				} else {
+					sessionLifecycle.textContent='SESSION ACTIVE // server cleanup enabled';
+					sessionLifecycle.classList.remove('expiring');
+				}
+			}
+
 			function render() {
 				if (!state || !playerNumber) return;
 				renderCreature(1);
@@ -1341,6 +1365,7 @@
 
 				renderMoves();
 				renderLog();
+				renderSessionLifecycle();
 			}
 
 			createButton.addEventListener('click', async () => {
@@ -1412,6 +1437,8 @@
 					location.reload();
 				}
 			});
+
+			setInterval(renderSessionLifecycle, 1000);
 
 			// A normal page refresh should return this tab to its active battle
 			// automatically. sessionStorage keeps this scoped to the current tab.

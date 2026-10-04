@@ -99,6 +99,11 @@ interface BattleState {
 	sessionTokens: [string | null, string | null];
 	disconnectDeadlines: [number | null, number | null];
 	connectionIds: [string | null, string | null];
+	createdAt: number;
+	lastActivityAt: number;
+	abandonedSince: number | null;
+	completedAt: number | null;
+	cleanupAt: number | null;
 }
 interface ClientInfo {
 	clientType: ClientType;
@@ -166,6 +171,9 @@ const RECOVER_ENERGY = 2;
 const MAX_LOG_ENTRIES = 24;
 const MAX_BATTLE_EVENTS = 64;
 const RECONNECT_GRACE_MS = 60_000;
+const ABANDONED_ROOM_TTL_MS = 15 * 60_000;
+const COMPLETED_ROOM_TTL_MS = 5 * 60_000;
+const STALE_ROOM_TTL_MS = 24 * 60 * 60_000;
 const BATTLE_CONFIG = { recoverEnergy: RECOVER_ENERGY, energyRecoveryPerRound: 0, battleRules: 19 };
 const REQUIRED_CLIENT_CAPABILITIES: ClientCapability[] = [
 	'creature-payload-v2',
@@ -177,7 +185,7 @@ const REQUIRED_CLIENT_CAPABILITIES: ClientCapability[] = [
 const CONNECTION_PROTOCOL = {
 	name: 'demonym-connect-v1',
 	version: 1,
-	serverVersion: '0.3.2.3',
+	serverVersion: '0.3.2.5',
 	requiredCapabilities: REQUIRED_CLIENT_CAPABILITIES,
 	supportedClientTypes: ['web', 'cardputer'] as ClientType[],
 	aliases: ['demonym-connect'],
@@ -279,6 +287,11 @@ function createInitialState(): BattleState {
 		sessionTokens: [null, null],
 		disconnectDeadlines: [null, null],
 		connectionIds: [null, null],
+		createdAt: Date.now(),
+		lastActivityAt: Date.now(),
+		abandonedSince: null,
+		completedAt: null,
+		cleanupAt: null,
 	};
 }
 function otherPlayer(player: PlayerNumber): PlayerNumber {
@@ -295,7 +308,14 @@ export class BattleRoom extends DurableObject<Env> {
 			return state;
 		}
 
-		return storedState as BattleState;
+		const state = storedState as BattleState;
+		const now = Date.now();
+		if (typeof state.createdAt !== 'number') state.createdAt = now;
+		if (typeof state.lastActivityAt !== 'number') state.lastActivityAt = now;
+		if (typeof state.abandonedSince === 'undefined') state.abandonedSince = null;
+		if (typeof state.completedAt === 'undefined') state.completedAt = state.winner !== null ? now : null;
+		if (typeof state.cleanupAt === 'undefined') state.cleanupAt = null;
+		return state;
 	}
 
 	private getReservedPlayers(): PlayerNumber[] {
@@ -378,12 +398,27 @@ export class BattleRoom extends DurableObject<Env> {
 			sessionTokens: _sessionTokens,
 			disconnectDeadlines: _disconnectDeadlines,
 			connectionIds: _connectionIds,
+			createdAt: _createdAt,
+			lastActivityAt: _lastActivityAt,
+			abandonedSince: _abandonedSince,
+			completedAt: _completedAt,
+			cleanupAt: _cleanupAt,
 			...publicState
 		} = state;
 		return {
 			...publicState,
+			sessionLifecycle: {
+				cleanupAt: state.cleanupAt,
+				reconnectGraceMs: RECONNECT_GRACE_MS,
+				abandonedRoomTtlMs: ABANDONED_ROOM_TTL_MS,
+				completedRoomTtlMs: COMPLETED_ROOM_TTL_MS,
+			},
 			players: state.players.map((creature) => ({
 				payload: creature.payload,
+				// Native Cardputer visual is part of the browser-facing battle
+				// presentation. It was persisted correctly but v0.3.2.4
+				// accidentally stripped it from stateForPlayer().
+				visual: creature.visual,
 				hp: creature.hp,
 				maxHp: creature.fighter.maxHp,
 				energy: creature.energy,
@@ -469,15 +504,46 @@ export class BattleRoom extends DurableObject<Env> {
 		}
 	}
 
-	private async scheduleReconnectAlarm(state: BattleState) {
-		const deadlines = state.disconnectDeadlines.filter((value): value is number => typeof value === 'number');
-		if (!deadlines.length) {
-			await this.ctx.storage.deleteAlarm();
+	private connectedPlayerCount(): number {
+		return this.getConnectedPlayers().length;
+	}
+
+	private refreshCleanupDeadline(state: BattleState, now = Date.now()) {
+		if (this.connectedPlayerCount() > 0) {
+			state.abandonedSince = null;
+			state.cleanupAt = null;
 			return;
 		}
+		if (state.abandonedSince === null) state.abandonedSince = now;
+		const ttl = state.winner !== null ? COMPLETED_ROOM_TTL_MS : ABANDONED_ROOM_TTL_MS;
+		state.cleanupAt = state.abandonedSince + ttl;
+	}
 
+	private touchActivity(state: BattleState, now = Date.now()) {
+		state.lastActivityAt = now;
+		if (this.connectedPlayerCount() > 0) {
+			state.abandonedSince = null;
+			state.cleanupAt = null;
+		}
+	}
+
+	private async scheduleReconnectAlarm(state: BattleState) {
+		const deadlines = state.disconnectDeadlines.filter((value): value is number => typeof value === 'number');
+		if (state.cleanupAt !== null) deadlines.push(state.cleanupAt);
+		deadlines.push(state.lastActivityAt + STALE_ROOM_TTL_MS);
 		await this.ctx.storage.setAlarm(Math.min(...deadlines));
 	}
+
+	private async destroyExpiredRoom(reason: string) {
+		for (const socket of this.ctx.getWebSockets()) {
+			try {
+				this.send(socket, { type: 'session-expired', message: reason });
+				socket.close(1000, reason);
+			} catch {}
+		}
+		await this.ctx.storage.deleteAll();
+	}
+
 
 	private resetInterruptedBattle(state: BattleState, message: string) {
 		const player1Payload = structuredClone(state.players[0].payload);
@@ -493,6 +559,7 @@ export class BattleRoom extends DurableObject<Env> {
 		state.initiativeWinner = null;
 		state.canonicalFirstPlayer = null;
 		state.winner = null;
+		state.completedAt = null;
 		state.battleRuntime = null;
 		state.lockedMoves = [null, null];
 		state.lockedCosts = [null, null];
@@ -533,6 +600,7 @@ export class BattleRoom extends DurableObject<Env> {
 		state.initiativeWinner = null;
 		state.canonicalFirstPlayer = null;
 		state.winner = null;
+		state.completedAt = null;
 		state.battleRuntime = null;
 		state.lockedMoves = [null, null];
 		state.lockedCosts = [null, null];
@@ -598,6 +666,7 @@ export class BattleRoom extends DurableObject<Env> {
 		}
 
 		const state = await this.getState();
+		this.touchActivity(state);
 		const helloSession = typeof data.sessionToken === 'string' ? data.sessionToken.trim() : '';
 		const requestedSession = helloSession || attachment.sessionToken || '';
 		let player: PlayerNumber | null = null;
@@ -920,6 +989,7 @@ export class BattleRoom extends DurableObject<Env> {
 		state.lockedCosts = [null, null];
 		if (report.outcome !== 'ongoing') {
 			state.phase = 'finished';
+			state.completedAt = Date.now();
 			if (report.outcome === 'first') state.winner = canonicalFirst;
 			else if (report.outcome === 'second') state.winner = canonicalSecond;
 			else state.winner = 0;
@@ -1094,6 +1164,13 @@ export class BattleRoom extends DurableObject<Env> {
 			return;
 		}
 
+		{
+			const activityState = await this.getState();
+			this.touchActivity(activityState);
+			await this.ctx.storage.put('state', activityState);
+			await this.scheduleReconnectAlarm(activityState);
+		}
+
 		if (data.type === 'client-hello') {
 			this.send(socket, { type: 'error', message: 'Client handshake is already complete.' });
 			return;
@@ -1174,6 +1251,7 @@ export class BattleRoom extends DurableObject<Env> {
 				round: 0,
 				message: `Player ${attachment.player} left the battle room.`,
 			});
+			this.refreshCleanupDeadline(state);
 			await this.ctx.storage.put('state', state);
 			await this.scheduleReconnectAlarm(state);
 			await this.broadcastState(state);
@@ -1203,6 +1281,7 @@ export class BattleRoom extends DurableObject<Env> {
 			state.sessionTokens[attachment.player - 1] = null;
 			state.disconnectDeadlines[attachment.player - 1] = null;
 			state.connectionIds[attachment.player - 1] = null;
+			this.refreshCleanupDeadline(state);
 			await this.ctx.storage.put('state', state);
 			await this.scheduleReconnectAlarm(state);
 			await this.broadcastState(state);
@@ -1216,6 +1295,7 @@ export class BattleRoom extends DurableObject<Env> {
 			player: attachment.player,
 			message: `Player ${attachment.player} disconnected. Reconnect window started.`,
 		});
+		this.refreshCleanupDeadline(state);
 		await this.ctx.storage.put('state', state);
 		await this.scheduleReconnectAlarm(state);
 		await this.broadcastState(state);
@@ -1224,24 +1304,36 @@ export class BattleRoom extends DurableObject<Env> {
 	async alarm() {
 		const state = await this.getState();
 		const now = Date.now();
-		const expiredPlayers: PlayerNumber[] = [];
 
+		if (state.lastActivityAt + STALE_ROOM_TTL_MS <= now) {
+			await this.destroyExpiredRoom('SESSION EXPIRED // STALE ROOM CLEANUP');
+			return;
+		}
+
+		const expiredPlayers: PlayerNumber[] = [];
 		for (const player of [1, 2] as PlayerNumber[]) {
 			const deadline = state.disconnectDeadlines[player - 1];
 			if (deadline !== null && deadline <= now) expiredPlayers.push(player);
 		}
-
 		for (const player of expiredPlayers) {
 			await this.expirePlayerSession(state, player, `Player ${player}'s reconnect window expired. Battle reset.`);
 		}
 
-		if (expiredPlayers.length) {
-			await this.ctx.storage.put('state', state);
-			await this.broadcastState(state);
+		this.refreshCleanupDeadline(state, now);
+		if (state.cleanupAt !== null && state.cleanupAt <= now) {
+			await this.destroyExpiredRoom(
+				state.winner !== null
+					? 'SESSION EXPIRED // COMPLETED BATTLE CLEANUP'
+					: 'SESSION EXPIRED // ABANDONED ROOM CLEANUP',
+			);
+			return;
 		}
 
+		await this.ctx.storage.put('state', state);
+		if (expiredPlayers.length) await this.broadcastState(state);
 		await this.scheduleReconnectAlarm(state);
 	}
+
 }
 
 function generateRoomCode(): string {
