@@ -644,25 +644,27 @@ export class BattleRoom extends DurableObject<Env> {
 		};
 		socket.serializeAttachment(updatedAttachment);
 
+		// Defer closing a stale socket generation until the replacement has been
+		// acknowledged and hydrated. Hard Cardputer reboots can leave the old
+		// TCP/WebSocket generation lingering briefly.
+		const replacedSockets: WebSocket[] = [];
 		if (resumed) {
 			for (const existingSocket of this.ctx.getWebSockets()) {
 				if (existingSocket === socket) continue;
 				const existingAttachment = existingSocket.deserializeAttachment() as SocketAttachment | null;
 				if (existingAttachment?.player === player && existingAttachment.sessionToken === sessionToken) {
-					existingSocket.close(4001, 'Session resumed by a newer connection');
+					replacedSockets.push(existingSocket);
 				}
 			}
 		}
 
 		this.addVerboseLog(state, `P${player} client hello accepted as ${resumed ? 'resume' : 'fresh'} session.`);
-		if (resumed) {
-			this.addVerboseLog(state, `P${player} session resume accepted.`);
-			this.addLog(state, `Player ${player} reconnected and resumed their session.`);
-			this.addEvent(state, { type: 'reconnect', player, message: `Player ${player} reconnected.` });
-		}
+		if (resumed) this.addVerboseLog(state, `P${player} session resume accepted.`);
 		await this.ctx.storage.put('state', state);
 		await this.scheduleReconnectAlarm(state);
 
+		// ACK first, then authoritative state. A rebooted Cardputer has no prior
+		// battle state in RAM, so this record hydrates round/locks/winner/start.
 		this.send(socket, {
 			type: 'hello-ack',
 			player,
@@ -672,6 +674,17 @@ export class BattleRoom extends DurableObject<Env> {
 			connectionProtocol: CONNECTION_PROTOCOL,
 		});
 		this.sendState(socket, state, player, 'welcome');
+		if (resumed) this.addVerboseLog(state, `P${player} authoritative resume state sent.`);
+
+		for (const existingSocket of replacedSockets) {
+			existingSocket.close(4001, 'Session resumed by a newer connection');
+		}
+
+		if (resumed) {
+			this.addLog(state, `Player ${player} reconnected and resumed their session.`);
+			this.addEvent(state, { type: 'reconnect', player, message: `Player ${player} reconnected.` });
+			await this.ctx.storage.put('state', state);
+		}
 		await this.broadcastState(state);
 		if (!resumed && result.info.clientType === 'web') {
 			await this.establishPlayer(socket, player);

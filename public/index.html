@@ -449,6 +449,28 @@
 					grid-template-columns: 1fr;
 				}
 			}
+			/* Material-inspired Demonym signal theme. */
+			:root{color-scheme:dark;--surface-0:#0b0f12;--surface-1:#11181d;--surface-2:#182228;--surface-3:#213039;--outline:#33454f;--signal:#56d6c9;--signal-soft:rgba(86,214,201,.13);--signal-strong:#8ff0e6;--text:#eef7f6;--muted:#9eb0b4;--radius:12px;--shadow:0 12px 32px rgba(0,0,0,.28)}
+			body{background:radial-gradient(circle at 50% -10%,rgba(86,214,201,.12),transparent 34rem),var(--surface-0);color:var(--text);font-family:ui-monospace,"Cascadia Code","SFMono-Regular",Consolas,monospace}
+			main{width:min(920px,calc(100% - 32px))} h1{color:var(--signal-strong);letter-spacing:-.035em} h2{letter-spacing:-.02em}
+			button,input,select,textarea{border-radius:8px;border:1px solid var(--outline);background:var(--surface-2);color:var(--text)}
+			button{border-color:#3e5d67;background:var(--surface-3);box-shadow:0 2px 6px rgba(0,0,0,.18);transition:transform 100ms ease,border-color 100ms ease,background 100ms ease}
+			button:hover:not(:disabled){border-color:var(--signal);background:#263a42;transform:translateY(-1px)}
+			button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+			.lobby,#battle{background:rgba(17,24,29,.88);border:1px solid var(--outline);border-radius:16px;padding:22px;box-shadow:var(--shadow)}
+			.client-mode,.lineage-picker,.payload-lab,#connection-meta,#battle-event,.round-panel,.result-panel{background:var(--surface-1);border-color:var(--outline);border-radius:var(--radius)}
+			.room,#player-label,#connection-meta,.note{color:var(--muted);opacity:1}
+			.creature{background:linear-gradient(180deg,rgba(33,48,57,.92),rgba(17,24,29,.92));border-color:var(--outline);border-radius:var(--radius);box-shadow:0 8px 22px rgba(0,0,0,.2)}
+			.creature.you{border-color:var(--signal);box-shadow:0 0 0 1px rgba(86,214,201,.18),0 8px 22px rgba(0,0,0,.2)}
+			.creature.active{outline-color:var(--signal-strong);background:linear-gradient(180deg,rgba(34,63,67,.95),rgba(17,24,29,.95))}
+			#signal-toss{color:var(--signal-strong)} #battle-event.show{border-color:var(--signal);background:var(--signal-soft)}
+			.round-panel .label{color:var(--muted);opacity:1}.move{border-color:var(--outline);background:var(--surface-2);border-radius:10px}
+			.move:hover:not(:disabled){border-color:var(--signal)}.move.locked{outline-color:var(--signal);background:var(--signal-soft)}.move.recover{border-color:#527080}
+			.log{border-top-color:var(--outline);background:rgba(11,15,18,.36);border-radius:var(--radius);padding:16px}
+			#battle-log li::marker{color:var(--signal)}#battle-log li.verbose{color:var(--muted)}
+			#copy-battle-log,#copy-log-simple,#copy-log-verbose{color:var(--signal-strong)}
+			@media(max-width:620px){main{width:min(100% - 18px,920px);padding:9px 0}.lobby,#battle{padding:15px;border-radius:12px}.creatures{grid-template-columns:1fr}.round-panel{grid-template-columns:1fr}}
+
 		</style>
 	</head>
 	<body>
