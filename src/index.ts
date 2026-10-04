@@ -59,6 +59,7 @@ interface StatusState {
 }
 interface CreatureState {
 	payload: CanonicalCreaturePayloadV2;
+	visual?: { encoding: 'indexed4-rgb565-v1'; width: number; height: number; pixels: string; palette: string };
 	fighter: V19Fighter;
 	hp: number;
 	energy: number;
@@ -113,6 +114,11 @@ interface SocketAttachment {
 	connectionId: string | null;
 }
 interface ClientMessage {
+	encoding?: string;
+	width?: number;
+	height?: number;
+	pixels?: string;
+	palette?: string;
 	type?: string;
 	moveId?: string;
 	lineage?: string;
@@ -1103,6 +1109,22 @@ export class BattleRoom extends DurableObject<Env> {
 			return;
 		}
 
+		if (data.type === 'creature-visual') {
+			const state = await this.getState();
+			if (
+				data.encoding === 'indexed4-rgb565-v1' &&
+				data.width === 32 && data.height === 32 &&
+				typeof data.pixels === 'string' && /^[0-9A-Fa-f]{1024}$/.test(data.pixels) &&
+				typeof data.palette === 'string' && /^[0-9A-Fa-f]{4}(,[0-9A-Fa-f]{4}){1,15}$/.test(data.palette)
+			) {
+				state.players[attachment.player - 1].visual = {
+					encoding: 'indexed4-rgb565-v1', width: 32, height: 32,
+					pixels: data.pixels.toUpperCase(), palette: data.palette.toUpperCase(),
+				};
+				await this.saveAndBroadcast(state);
+			}
+			return;
+		}
 		if (data.type === 'creature-snapshot') {
 			await this.handleCreatureImport(socket, attachment.player, data.creature, true);
 			return;
