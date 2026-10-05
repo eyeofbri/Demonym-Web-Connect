@@ -187,7 +187,7 @@ const REQUIRED_CLIENT_CAPABILITIES: ClientCapability[] = [
 const CONNECTION_PROTOCOL = {
 	name: 'demonym-connect-v1',
 	version: 1,
-	serverVersion: '0.3.2.6',
+	serverVersion: '0.3.2.7',
 	requiredCapabilities: REQUIRED_CLIENT_CAPABILITIES,
 	supportedClientTypes: ['web', 'cardputer'] as ClientType[],
 	aliases: ['demonym-connect'],
