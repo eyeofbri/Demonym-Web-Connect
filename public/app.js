@@ -159,12 +159,25 @@ async function loadNews() {
 		}
 		if (!listResponse.ok) throw new Error(`GitHub returned ${listResponse.status}`);
 		const files = (await listResponse.json()).filter((item) => item.type === 'file' && /\.(md|txt)$/i.test(item.name) && !item.name.startsWith('_'));
-		const posts = await Promise.all(files.map(async (file) => {
+		async function earliestCommitDate(file) {
 			const commitUrl = `https://api.github.com/repos/${NEWS_REPO}/commits?path=${encodeURIComponent(`${NEWS_PATH}/${file.name}`)}&per_page=1`;
-			const [commitResponse, contentResponse] = await Promise.all([fetch(commitUrl, { headers }), fetch(file.download_url)]);
-			const commits = commitResponse.ok ? await commitResponse.json() : [];
+			const firstResponse = await fetch(commitUrl, { headers });
+			if (!firstResponse.ok) return '1970-01-01T00:00:00Z';
+
+			let commits = await firstResponse.json();
+			const link = firstResponse.headers.get('link') || '';
+			const lastMatch = link.match(/<([^>]+)>;\s*rel="last"/);
+			if (lastMatch) {
+				const lastResponse = await fetch(lastMatch[1], { headers });
+				if (lastResponse.ok) commits = await lastResponse.json();
+			}
+
+			return commits?.[0]?.commit?.committer?.date || commits?.[0]?.commit?.author?.date || '1970-01-01T00:00:00Z';
+		}
+
+		const posts = await Promise.all(files.map(async (file) => {
+			const [date, contentResponse] = await Promise.all([earliestCommitDate(file), fetch(file.download_url)]);
 			const content = contentResponse.ok ? await contentResponse.text() : '';
-			const date = commits?.[0]?.commit?.committer?.date || commits?.[0]?.commit?.author?.date || '1970-01-01T00:00:00Z';
 			return { name: file.name, date, content, html: renderMinimalMarkdown(content, file.name) };
 		}));
 		posts.sort((a, b) => new Date(b.date) - new Date(a.date) || a.name.localeCompare(b.name));

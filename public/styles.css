@@ -720,3 +720,10 @@ html[data-ui-style="sharp"] .setting-bucket{position:relative;overflow:hidden}
 html[data-ui-style="sharp"] .setting-bucket:after{content:"SYS//CFG";position:absolute;right:10px;top:7px;color:color-mix(in srgb,var(--muted) 44%,transparent);font:600 6px/1 "Chakra Petch",sans-serif;letter-spacing:.16em;pointer-events:none}
 
 @media(max-width:620px){.profile-links{grid-template-columns:1fr}.site-footer-inner{width:min(920px,calc(100% - 18px))}}
+
+/* Cardputer-style battle resource colors. */
+:root{--hp:#ff6b6b;--energy:#64a7ff}
+.meter-row:not(.energy)>span:first-child{color:var(--hp)}
+.meter-row:not(.energy) .meter>span{background:var(--hp)}
+.meter-row.energy>span:first-child{color:var(--energy)}
+.meter-row.energy .meter>span{background:var(--energy);opacity:1}
