@@ -476,6 +476,7 @@ export class BattleRoom extends DurableObject<Env> {
 
 
 	private requestMissingOpponentVisuals(state: BattleState) {
+		const clients = this.getConnectedClients();
 		for (const socket of this.ctx.getWebSockets()) {
 			const attachment = socket.deserializeAttachment() as SocketAttachment | null;
 			if (
@@ -487,6 +488,12 @@ export class BattleRoom extends DurableObject<Env> {
 				continue;
 
 			const opponent = otherPlayer(attachment.player);
+			const opponentClient = clients.find((client) => client.player === opponent);
+			// Native visual relay is only a browser-dev fallback. Cardputer players
+			// upload their own exact visual and should never be overwritten by a
+			// second device's seed-only reconstruction.
+			if (opponentClient?.clientType !== 'web') continue;
+
 			const creature = state.players[opponent - 1];
 			if (creature.visual) continue;
 			this.send(socket, {
@@ -1231,9 +1238,10 @@ export class BattleRoom extends DurableObject<Env> {
 			const isRelayedOpponent = targetPlayer !== attachment.player;
 			const canRelayOpponent =
 				attachment.clientInfo?.clientType === 'cardputer' && attachment.clientInfo.capabilities.includes('visual-relay-v1');
+			const targetClient = this.getConnectedClients().find((client) => client.player === targetPlayer);
 
-			if (isRelayedOpponent && !canRelayOpponent) {
-				this.send(socket, { type: 'error', message: 'Opponent visual relay requires visual-relay-v1.' });
+			if (isRelayedOpponent && (!canRelayOpponent || targetClient?.clientType !== 'web')) {
+				this.send(socket, { type: 'error', message: 'Opponent visual relay is only available for a connected Web player.' });
 				return;
 			}
 
