@@ -100,6 +100,7 @@ interface BattleState {
 	sessionTokens: [string | null, string | null];
 	disconnectDeadlines: [number | null, number | null];
 	connectionIds: [string | null, string | null];
+	lastSeenAt: [number | null, number | null];
 	createdAt: number;
 	lastActivityAt: number;
 	abandonedSince: number | null;
@@ -173,6 +174,7 @@ const RECOVER_ENERGY = 2;
 const MAX_LOG_ENTRIES = 24;
 const MAX_BATTLE_EVENTS = 64;
 const RECONNECT_GRACE_MS = 60_000;
+const CARDPUTER_HEARTBEAT_TIMEOUT_MS = 30_000;
 const ABANDONED_ROOM_TTL_MS = 15 * 60_000;
 const COMPLETED_ROOM_TTL_MS = 5 * 60_000;
 const STALE_ROOM_TTL_MS = 24 * 60 * 60_000;
@@ -289,6 +291,7 @@ function createInitialState(): BattleState {
 		sessionTokens: [null, null],
 		disconnectDeadlines: [null, null],
 		connectionIds: [null, null],
+		lastSeenAt: [null, null],
 		createdAt: Date.now(),
 		lastActivityAt: Date.now(),
 		abandonedSince: null,
@@ -301,6 +304,7 @@ function otherPlayer(player: PlayerNumber): PlayerNumber {
 }
 
 export class BattleRoom extends DurableObject<Env> {
+	private visualRelayPending = new Set<PlayerNumber>();
 	private async getState(): Promise<BattleState> {
 		const storedState = await this.ctx.storage.get<BattleState | { version?: number }>('state');
 
@@ -312,6 +316,7 @@ export class BattleRoom extends DurableObject<Env> {
 
 		const state = storedState as BattleState;
 		const now = Date.now();
+		if (!Array.isArray(state.lastSeenAt)) state.lastSeenAt = [null, null];
 		if (typeof state.createdAt !== 'number') state.createdAt = now;
 		if (typeof state.lastActivityAt !== 'number') state.lastActivityAt = now;
 		if (typeof state.abandonedSince === 'undefined') state.abandonedSince = null;
@@ -400,6 +405,7 @@ export class BattleRoom extends DurableObject<Env> {
 			sessionTokens: _sessionTokens,
 			disconnectDeadlines: _disconnectDeadlines,
 			connectionIds: _connectionIds,
+			lastSeenAt: _lastSeenAt,
 			createdAt: _createdAt,
 			lastActivityAt: _lastActivityAt,
 			abandonedSince: _abandonedSince,
@@ -495,7 +501,8 @@ export class BattleRoom extends DurableObject<Env> {
 			if (opponentClient?.clientType !== 'web') continue;
 
 			const creature = state.players[opponent - 1];
-			if (creature.visual) continue;
+			if (creature.visual || this.visualRelayPending.has(opponent)) continue;
+			this.visualRelayPending.add(opponent);
 			this.send(socket, {
 				type: 'creature-visual-request',
 				player: opponent,
@@ -565,6 +572,13 @@ export class BattleRoom extends DurableObject<Env> {
 
 	private async scheduleReconnectAlarm(state: BattleState) {
 		const deadlines = state.disconnectDeadlines.filter((value): value is number => typeof value === 'number');
+		for (const socket of this.ctx.getWebSockets()) {
+			const attachment = socket.deserializeAttachment() as SocketAttachment | null;
+			if (!attachment?.player || !attachment.handshakeComplete || attachment.clientInfo?.clientType !== 'cardputer') continue;
+			if (state.connectionIds[attachment.player - 1] !== attachment.connectionId) continue;
+			const seen = state.lastSeenAt[attachment.player - 1];
+			if (seen !== null && state.disconnectDeadlines[attachment.player - 1] === null) deadlines.push(seen + CARDPUTER_HEARTBEAT_TIMEOUT_MS);
+		}
 		if (state.cleanupAt !== null) deadlines.push(state.cleanupAt);
 		deadlines.push(state.lastActivityAt + STALE_ROOM_TTL_MS);
 		await this.ctx.storage.setAlarm(Math.min(...deadlines));
@@ -622,6 +636,7 @@ export class BattleRoom extends DurableObject<Env> {
 		state.sessionTokens[player - 1] = null;
 		state.disconnectDeadlines[player - 1] = null;
 		state.connectionIds[player - 1] = null;
+		state.lastSeenAt[player - 1] = null;
 		this.resetInterruptedBattle(state, message);
 		this.restoreConnectedOpponentAfterReset(state, player);
 		this.addEvent(state, { type: 'session_expired', player, round: 0, message });
@@ -764,6 +779,7 @@ export class BattleRoom extends DurableObject<Env> {
 		const connectionId = generateSessionToken();
 		state.connectionIds[player - 1] = connectionId;
 		state.disconnectDeadlines[player - 1] = null;
+		state.lastSeenAt[player - 1] = Date.now();
 
 		const updatedAttachment: SocketAttachment = {
 			player,
@@ -892,6 +908,7 @@ export class BattleRoom extends DurableObject<Env> {
 		if (state.players[player - 1].payload.lineage === LINEAGE_WIRE[lineage] && state.players[player - 1].payload.source === 'web-test')
 			return;
 		state.players[player - 1] = createCreature(player, lineage);
+		this.visualRelayPending.delete(player);
 		this.addLog(state, `Player ${player} selected ${lineage}.`);
 		this.addEvent(state, { type: 'lineage_selected', player, message: `Player ${player} selected ${lineage}.` });
 		await this.saveAndBroadcast(state);
@@ -1190,7 +1207,9 @@ export class BattleRoom extends DurableObject<Env> {
 		}
 
 		if (!attachment.handshakeComplete) {
-			if (data.type === 'client-hello') {
+			if (data.type === 'heartbeat') return;
+
+		if (data.type === 'client-hello') {
 				await this.handleClientHello(socket, data, attachment);
 				return;
 			}
@@ -1211,9 +1230,14 @@ export class BattleRoom extends DurableObject<Env> {
 		{
 			const activityState = await this.getState();
 			this.touchActivity(activityState);
+			if (attachment.player && activityState.connectionIds[attachment.player - 1] === attachment.connectionId) {
+				activityState.lastSeenAt[attachment.player - 1] = Date.now();
+			}
 			await this.ctx.storage.put('state', activityState);
 			await this.scheduleReconnectAlarm(activityState);
 		}
+
+		if (data.type === 'heartbeat') return;
 
 		if (data.type === 'client-hello') {
 			this.send(socket, { type: 'error', message: 'Client handshake is already complete.' });
@@ -1261,6 +1285,7 @@ export class BattleRoom extends DurableObject<Env> {
 					pixels: data.pixels.toUpperCase(),
 					palette: data.palette.toUpperCase(),
 				};
+				this.visualRelayPending.delete(targetPlayer);
 				if (isRelayedOpponent) this.addVerboseLog(state, `P${attachment.player} relayed native visual for P${targetPlayer}.`);
 				await this.saveAndBroadcast(state);
 			}
@@ -1308,6 +1333,7 @@ export class BattleRoom extends DurableObject<Env> {
 			state.sessionTokens[attachment.player - 1] = null;
 			state.disconnectDeadlines[attachment.player - 1] = null;
 			state.connectionIds[attachment.player - 1] = null;
+			state.lastSeenAt[attachment.player - 1] = null;
 			this.resetInterruptedBattle(state, `Player ${attachment.player} left the battle room.`);
 			this.restoreConnectedOpponentAfterReset(state, attachment.player);
 			this.addEvent(state, {
@@ -1354,6 +1380,7 @@ export class BattleRoom extends DurableObject<Env> {
 		}
 
 		state.disconnectDeadlines[attachment.player - 1] = Date.now() + RECONNECT_GRACE_MS;
+		state.lastSeenAt[attachment.player - 1] = null;
 		this.addLog(state, `Player ${attachment.player} disconnected. Waiting up to ${RECONNECT_GRACE_MS / 1000} seconds for reconnection.`);
 		this.addEvent(state, {
 			type: 'disconnect',
@@ -1373,6 +1400,27 @@ export class BattleRoom extends DurableObject<Env> {
 		if (state.lastActivityAt + STALE_ROOM_TTL_MS <= now) {
 			await this.destroyExpiredRoom('SESSION EXPIRED // STALE ROOM CLEANUP');
 			return;
+		}
+
+		const heartbeatTimedOutPlayers: PlayerNumber[] = [];
+		for (const socket of this.ctx.getWebSockets()) {
+			const attachment = socket.deserializeAttachment() as SocketAttachment | null;
+			if (!attachment?.player || !attachment.handshakeComplete || attachment.clientInfo?.clientType !== 'cardputer') continue;
+			if (state.connectionIds[attachment.player - 1] !== attachment.connectionId) continue;
+			const seen = state.lastSeenAt[attachment.player - 1];
+			if (seen !== null && state.disconnectDeadlines[attachment.player - 1] === null && seen + CARDPUTER_HEARTBEAT_TIMEOUT_MS <= now) {
+				heartbeatTimedOutPlayers.push(attachment.player);
+				attachment.handshakeComplete = false;
+				socket.serializeAttachment(attachment);
+				try { socket.close(4002, 'Cardputer heartbeat timeout'); } catch {}
+			}
+		}
+		for (const player of [...new Set(heartbeatTimedOutPlayers)]) {
+			state.connectionIds[player - 1] = null;
+			state.lastSeenAt[player - 1] = null;
+			state.disconnectDeadlines[player - 1] = now + RECONNECT_GRACE_MS;
+			this.addLog(state, `Player ${player} disconnected. Waiting up to ${RECONNECT_GRACE_MS / 1000} seconds for reconnection.`);
+			this.addEvent(state, { type: 'disconnect', player, message: `Player ${player} heartbeat timed out. Reconnect window started.` });
 		}
 
 		const expiredPlayers: PlayerNumber[] = [];
@@ -1395,7 +1443,7 @@ export class BattleRoom extends DurableObject<Env> {
 		}
 
 		await this.ctx.storage.put('state', state);
-		if (expiredPlayers.length) await this.broadcastState(state);
+		if (expiredPlayers.length || heartbeatTimedOutPlayers.length) await this.broadcastState(state);
 		await this.scheduleReconnectAlarm(state);
 	}
 
