@@ -38,7 +38,8 @@ type BattleEventType =
 	| 'rematch_started'
 	| 'disconnect'
 	| 'reconnect'
-	| 'session_expired';
+	| 'session_expired'
+	| 'room_closed';
 type ClientType = 'web' | 'cardputer';
 type LockedAction = MoveId | 'guard' | 'recover' | null;
 
@@ -51,7 +52,9 @@ type ClientCapability =
 	| 'rematch-v1'
 	| 'session-resume-v1'
 	| 'compact-state-v1'
-	| 'visual-relay-v1';
+	| 'visual-relay-v1'
+	| 'device-first-v1'
+	| 'state-sync-v1';
 
 interface StatusState {
 	id: StatusId;
@@ -109,6 +112,7 @@ interface BattleState {
 }
 interface ClientInfo {
 	clientType: ClientType;
+	role: 'participant';
 	clientVersion: string;
 	capabilities: ClientCapability[];
 }
@@ -135,6 +139,7 @@ interface ClientMessage {
 	protocolVersion?: number;
 	clientType?: string;
 	clientVersion?: string;
+	role?: string;
 	capabilities?: unknown;
 	sessionToken?: string;
 	round?: number;
@@ -189,7 +194,7 @@ const REQUIRED_CLIENT_CAPABILITIES: ClientCapability[] = [
 const CONNECTION_PROTOCOL = {
 	name: 'demonym-connect-v1',
 	version: 1,
-	serverVersion: '0.3.2.7',
+	serverVersion: '0.3.3.0',
 	requiredCapabilities: REQUIRED_CLIENT_CAPABILITIES,
 	supportedClientTypes: ['web', 'cardputer'] as ClientType[],
 	aliases: ['demonym-connect'],
@@ -204,6 +209,9 @@ const BATTLE_PROTOCOL = {
 	sessionResume: true,
 	reconnectGraceMs: RECONNECT_GRACE_MS,
 	connectionProtocol: CONNECTION_PROTOCOL,
+	primaryParticipant: 'cardputer',
+	browserRole: 'dev-test-optional',
+	deviceFirst: true,
 };
 function numericSeed(): number {
 	const x = new Uint32Array(1);
@@ -691,6 +699,9 @@ export class BattleRoom extends DurableObject<Env> {
 			return { ok: false, error: 'capabilities must be an array of strings.' };
 		}
 
+		const role = data.role === undefined || data.role === 'participant' ? 'participant' : null;
+		if (!role) return { ok: false, error: 'Only participant role is accepted on battle sockets. Observer support uses tooling endpoints.' };
+
 		const capabilities = [...new Set(data.capabilities)] as ClientCapability[];
 		const missing = REQUIRED_CLIENT_CAPABILITIES.filter((capability) => !capabilities.includes(capability));
 		if (missing.length) {
@@ -701,6 +712,7 @@ export class BattleRoom extends DurableObject<Env> {
 			ok: true,
 			info: {
 				clientType: data.clientType,
+				role,
 				clientVersion,
 				capabilities,
 			},
@@ -871,6 +883,10 @@ export class BattleRoom extends DurableObject<Env> {
 		this.addLog(state, `Player ${player} established.`);
 		this.addEvent(state, { type: 'ready', player, message: `Player ${player} established.` });
 		if (state.ready[0] && state.ready[1] && this.bothPlayersConnected()) {
+			const clients = this.getConnectedClients();
+			if (clients.length === 2 && clients.every((client) => client.clientType === 'cardputer')) {
+				this.addVerboseLog(state, 'Device-first room established: Cardputer vs Cardputer.');
+			}
 			const startingPlayer = pickStartingPlayer();
 			state.started = true;
 			state.phase = 'selecting';
@@ -1209,6 +1225,14 @@ export class BattleRoom extends DurableObject<Env> {
 		if (!attachment.handshakeComplete) {
 			if (data.type === 'heartbeat') return;
 
+		if (data.type === 'state-request') {
+			const state = await this.getState();
+			this.addVerboseLog(state, `P${attachment.player} requested authoritative state sync.`);
+			await this.ctx.storage.put('state', state);
+			this.sendState(socket, state, attachment.player);
+			return;
+		}
+
 		if (data.type === 'client-hello') {
 				await this.handleClientHello(socket, data, attachment);
 				return;
@@ -1320,12 +1344,38 @@ export class BattleRoom extends DurableObject<Env> {
 		if (data.type === 'recover') await this.handleRecover(socket, attachment.player);
 	}
 
+	private async closeCompletedRoom(state: BattleState, leavingPlayer: PlayerNumber) {
+		const message = `Completed match closed by Player ${leavingPlayer}.`;
+		this.addLog(state, message);
+		this.addEvent(state, { type: 'room_closed', player: leavingPlayer, round: state.round, message });
+		for (const peer of this.ctx.getWebSockets()) {
+			const peerAttachment = peer.deserializeAttachment() as SocketAttachment | null;
+			if (!peerAttachment?.handshakeComplete) continue;
+			try { this.send(peer, { type: 'room-closed', reason: 'completed', player: leavingPlayer, message }); } catch {}
+		}
+		// The match is terminal. Drop all resumable ownership so neither device
+		// interprets the peer's exit as a reconnectable disconnect.
+		state.sessionTokens = [null, null];
+		state.disconnectDeadlines = [null, null];
+		state.connectionIds = [null, null];
+		state.lastSeenAt = [null, null];
+		await this.ctx.storage.put('state', state);
+		for (const peer of this.ctx.getWebSockets()) {
+			try { peer.close(1000, 'Completed match closed'); } catch {}
+		}
+		await this.ctx.storage.deleteAll();
+	}
+
 	private async handleLeave(socket: WebSocket, attachment: SocketAttachment) {
 		if (!attachment.player || !attachment.sessionToken || !attachment.connectionId) {
 			socket.close(1000, 'Player left room');
 			return;
 		}
 		const state = await this.getState();
+		if (state.phase === 'finished' && state.winner !== null) {
+			await this.closeCompletedRoom(state, attachment.player);
+			return;
+		}
 		if (
 			state.sessionTokens[attachment.player - 1] === attachment.sessionToken &&
 			state.connectionIds[attachment.player - 1] === attachment.connectionId
